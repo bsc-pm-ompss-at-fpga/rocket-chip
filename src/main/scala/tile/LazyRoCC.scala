@@ -395,6 +395,234 @@ object OpcodeSet {
   def all = custom0 | custom1 | custom2 | custom3
 }
 
+class bogus(implicit p: Parameters) extends LazyRoCC(opcodes) {
+  talksToPicos = true
+  println("Hello from bogus!")
+  override lazy val module = new bogusModule(this)
+}
+
+class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int = 24)(implicit p: Parameters) extends LazyRoCCModule(outer)
+  with HasCoreParameters {
+
+    // This register captures the index of the target
+    // result register
+    val req_rd = Reg(io.resp.bits.rd)
+
+    val s_idle :: s_work_request :: s_nanosid_fetch_work :: s_picosid_fetch_work :: s_submitting :: s_retiring :: s_sub_request :: s_submitting_three :: Nil = Enum(Bits(), 8)
+    val state = Reg(init = s_idle)
+    val busyWithSubmitThree = Reg(init = Bool(false))
+
+    // Do not generate interrupts
+    io.interrupt := Bool(false)
+
+    // For detecting the operation to perform
+      val funct         = io.cmd.bits.inst.funct
+      val doSubmit      = funct === UInt(1)
+      val doNFetchWork  = funct === UInt(2)
+      val doRetire      = funct === UInt(3)
+      val doPFetchWork  = funct === UInt(4)
+      val doSubRequest  = funct === UInt(5)
+      val doWorkRequest = funct === UInt(6)
+      val doSubmitThree = funct === UInt(7)
+
+    // Let the registers reset to 0
+    val x = Reg(UInt(width = xLen), init = UInt(0))
+    val tag = Reg(UInt(width = xLen), init = UInt(0))
+
+    // The module is always ready to receive data
+    io.cmd.ready  := (state === s_idle)
+    
+    // Tautology that says that we are 
+    // busy whenever we are not idle
+    io.busy       := (state =/= s_idle)
+
+    // Get input when the command is fired
+    when (io.cmd.fire()) {
+      req_rd            := io.cmd.bits.inst.rd
+      x                 := io.cmd.bits.rs1
+      tag               := io.cmd.bits.rs2
+
+      when (doSubmit) {
+        state := s_submitting
+      } .elsewhen (doNFetchWork) {
+        state := s_nanosid_fetch_work
+      } .elsewhen (doRetire) {
+        state := s_retiring
+      } .elsewhen (doPFetchWork) {
+        state := s_picosid_fetch_work
+      } .elsewhen (doSubRequest) {
+        state := s_sub_request
+      } .elsewhen (doWorkRequest) {
+        state := s_work_request
+      } .elsewhen (doSubmitThree) {
+        state := s_submitting_three
+      }
+    }
+
+    // Implements submission requests
+      val sub_req_valid              = (state === s_sub_request)
+      val submissionError            = Fill(64, 1.U)
+
+      io.tag                        := tag
+      io.subRequest.bits.numPackets := x
+      io.subRequest.bits.arbID      := tag
+      io.subRequest.valid           := (state === s_sub_request)
+
+      val sub_request_success        = io.subRequest.fire()
+
+      when (state === s_sub_request) {
+        state := s_idle
+        io.resp.bits.data                   := Mux(sub_request_success, 0.U, submissionError)
+      }
+
+    // Implements submission to SubQ
+      val fasterSubmitQueue                  = Module( new Queue(SubmissionUnit(), 16) )
+      val sub_valid                          = (state === s_submitting)
+      val submit_success                     = io.subQInterface.fire() && !busyWithSubmitThree
+
+			io.subQInterface.valid := ((state === s_submitting) && !busyWithSubmitThree) || (busyWithSubmitThree && fasterSubmitQueue.io.deq.valid)
+
+      when (state === s_submitting) {
+        state                               := s_idle
+        io.resp.bits.data                   := Mux(submit_success, 0.U, submissionError)
+
+        when (!busyWithSubmitThree) {
+          io.tag                            := tag
+          io.subQInterface.bits             := x
+        }
+      }
+
+
+    // Implements faster submission to SubQ
+      val packetsToSend                      = RegInit(t = UInt(2.W), init = 3.asUInt(2.W))
+      val submit3_success                    = fasterSubmitQueue.io.enq.fire()
+      val sub3_valid                         = (state === s_submitting_three)
+    
+      fasterSubmitQueue.io.enq.bits.packet0 := x(63, 32)
+      fasterSubmitQueue.io.enq.bits.packet1 := x(31, 0)
+      fasterSubmitQueue.io.enq.bits.packet2 := tag(31, 0)
+      fasterSubmitQueue.io.enq.valid        := (state === s_submitting_three)
+
+      when (state === s_submitting_three) {
+        state                               := s_idle
+        io.resp.bits.data                   := Mux(submit3_success, 0.U, submissionError)
+
+        when (submit3_success) {
+          busyWithSubmitThree               := Bool(true)
+        }
+      }
+
+      when (busyWithSubmitThree) {
+        when (fasterSubmitQueue.io.deq.valid) {
+          when (packetsToSend === 3.U) {
+
+            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet0
+            fasterSubmitQueue.io.deq.ready := Bool(false)
+
+            when (io.subQInterface.fire()) {
+              packetsToSend := 2.U
+            }
+
+          } .elsewhen (packetsToSend === 2.U) {
+
+            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet1
+            fasterSubmitQueue.io.deq.ready := Bool(false)
+
+            when (io.subQInterface.fire()) {
+              packetsToSend := 1.U
+            }
+
+          } .elsewhen (packetsToSend === 1.U) {
+
+            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet2
+            fasterSubmitQueue.io.deq.ready := Bool(false)
+
+            when (io.subQInterface.fire()) {
+              packetsToSend := 3.U
+              fasterSubmitQueue.io.deq.ready := Bool(true)
+            }
+          }
+        } .otherwise {
+          busyWithSubmitThree := Bool(false)
+          fasterSubmitQueue.io.deq.ready := Bool(false)
+        }
+      }
+      
+
+    // Implements work-fetching
+    val pendingRequestsCounter  = RegInit(0.U(xLen.W))
+    val userReadNanosID         = RegInit(false.B)
+    val workFetchingError       = Fill(64, 1.U)
+    val thereIsReadyPacket      = io.readyQInterface.valid
+    val increasedCounterVal     = pendingRequestsCounter + 1.U
+    val decreasedCounterVal     = pendingRequestsCounter - 1.U
+
+    io.readyQInterface.ready  := (state === s_picosid_fetch_work && pwfi_success)
+
+      // Implements work request
+        io.tag := tag
+
+        val wr_valid                    = (state === s_work_request)
+        val wr_success                  = io.readyRequestInterface.fire()
+
+        io.readyRequestInterface.valid  := (state === s_work_request) && (pendingRequestsCounter === 0.asUInt(xLen.W))
+
+        when (state === s_work_request) {
+          io.resp.bits.data          := Mux(wr_success, increasedCounterVal, pendingRequestsCounter)
+          pendingRequestsCounter     := Mux(wr_success, increasedCounterVal, pendingRequestsCounter)
+          state                      := s_idle
+        }
+
+      // Implements NanosID work-fetching
+        io.tag := tag
+
+        lazy val nanosID             =   io.readyQInterface.bits.nanosID
+        lazy val nwfi_valid          =   (state === s_nanosid_fetch_work)
+        lazy val nwfi_success        =   thereIsReadyPacket && !userReadNanosID
+
+        when (state === s_nanosid_fetch_work) {
+          when (nwfi_success)        { userReadNanosID := true.B }
+
+          io.resp.bits.data          := Mux(nwfi_success, nanosID, workFetchingError)
+          state                      := s_idle
+        }
+
+      // Implements PicosID work-fetching
+        io.tag := tag
+
+        lazy val picosID             =   io.readyQInterface.bits.picosID
+        lazy val pwfi_valid          =   (state === s_picosid_fetch_work)
+        lazy val pwfi_success        =   thereIsReadyPacket && userReadNanosID
+
+        when (state === s_picosid_fetch_work) {
+          when (pwfi_success) {
+            pendingRequestsCounter  := decreasedCounterVal
+            userReadNanosID         := false.B    
+          }
+
+          io.resp.bits.data         := Mux(pwfi_success, picosID, workFetchingError)
+          state                     := s_idle
+        }
+
+    // Implements retirement
+      io.retInterface.bits  := x
+      io.retInterface.valid := (state === s_retiring)
+      when (io.retInterface.fire()) { state := s_idle }
+
+    // Write data to the reply register if
+    // any rd-writing instruction has been
+    // issued
+    io.resp.valid           := wr_valid || nwfi_valid || pwfi_valid || sub3_valid || sub_valid || sub_req_valid
+
+    // The register to write to should
+    // always be the one chosen by the
+    // user
+    io.resp.bits.rd     := req_rd
+
+    // We never issue memory requests
+    io.mem.req.valid  := Bool(false)
+}
+
 class RoccCommandRouter(opcodes: Seq[OpcodeSet])(implicit p: Parameters)
     extends CoreModule()(p) {
   val io = new Bundle {
