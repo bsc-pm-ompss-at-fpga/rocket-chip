@@ -9,7 +9,11 @@ import freechips.rocketchip.subsystem.{Attachable, HierarchicalLocation, TLBusWr
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
 
-case class MaskROMParams(address: BigInt, name: String, depth: Int = 2048, width: Int = 32)
+case class MaskROMParams(
+  address: BigInt = 0x50000000,
+  name: String ="bootromNEW",
+  depth: Int = 2048,
+  width: Int = 32)
 
 class TLMaskROM(c: MaskROMParams)(implicit p: Parameters) extends LazyModule {
   val beatBytes = c.width/8
@@ -57,7 +61,7 @@ class TLMaskROM(c: MaskROMParams)(implicit p: Parameters) extends LazyModule {
   }
 }
 
-case class MaskROMLocated(loc: HierarchicalLocation) extends Field[Seq[MaskROMParams]](Nil)
+case class MaskROMLocated(loc: HierarchicalLocation) extends Field[Option[MaskROMParams]](None)
 
 object MaskROM {
   def attach(params: MaskROMParams, subsystem: Attachable, where: TLBusWrapperLocation)

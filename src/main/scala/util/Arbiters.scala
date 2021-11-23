@@ -143,3 +143,274 @@ class InOrderArbiter[T <: Data, U <: Data](reqTyp: T, respTyp: U, n: Int)
     io.in_resp.head <> io.out_resp
   }
 }
+
+class RoutingInfo(arbN: Int, maxBurstLength: Int) extends Bundle {
+  val arbID = UInt(log2Ceil(arbN).W)
+  val numPackets = UInt(log2Ceil(maxBurstLength + 1).W)
+
+  override def cloneType: this.type = new RoutingInfo(arbN, maxBurstLength).asInstanceOf[this.type]
+}
+
+object RoutingInfo {
+  def apply(arbN: Int, maxBurstLength: Int): RoutingInfo = new RoutingInfo(arbN, maxBurstLength)
+}
+
+class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Vec(arbN, Decoupled(typ.cloneType)).flip
+    val out = Decoupled(typ.cloneType)
+    val routingInfo = Decoupled(RoutingInfo(arbN, maxBurstLength)).flip
+  })
+
+  val chosen = RegEnable(io.routingInfo.bits.arbID, io.routingInfo.fire())
+  val burstCounter = RegInit(0.U(log2Ceil(maxBurstLength).W))
+
+  io.out.valid := (burstCounter > 0.U && io.in(chosen).valid)
+  io.out.bits := io.in(chosen).bits
+
+  when (io.out.fire()) {
+    burstCounter := burstCounter - 1.U
+  }
+
+  when (io.routingInfo.fire()) {
+    burstCounter := io.routingInfo.bits.numPackets
+  }
+
+  io.routingInfo.ready := burstCounter === 0.U
+
+  for (i <- 0 until arbN) {
+    io.in(i).ready := io.out.ready && chosen === i.U && burstCounter > 0.U
+  }
+}
+
+class DelayerAdapter[T <: Data](typ: T) extends Module {
+  val io = IO(new Bundle {
+    val in = Decoupled(typ.cloneType).flip
+    val out = Decoupled(typ.cloneType)
+  })
+
+  val counter = RegInit(t = UInt(1.W), init = 0.U)
+  val numCyclesSinceReady = RegInit(t = UInt(1.W), init = 0.U)
+  io.out.bits := io.in.bits
+
+  // Counter == 0: Def: waiting for a new transaction to happen
+  //               R1: hides firing from producer
+  //               R2: lets the consumer acknowledge the firing
+  // Counter == 1: Def: keeping data steady for one cycle more
+  //               after a transaction happened
+  //               R1: lets the producer acknowledge the firing
+  //               R2: makes the consumer see a low valid signal
+  
+  // Writable signals
+  // in.ready
+  // out.valid
+  // out.bits
+  
+  when (!io.out.ready) {
+    numCyclesSinceReady := 0.U 
+  } .otherwise {
+    numCyclesSinceReady := 1.U 
+  }
+
+  when (counter === 1.U) {
+    io.in.ready := true.B
+    io.out.valid := false.B
+
+    counter := 0.U
+  } .otherwise {
+    when (numCyclesSinceReady === 1.U) {
+      io.in.ready := false.B
+      io.out.valid := io.in.valid && io.out.ready
+
+      when (io.out.fire()) {
+        counter := 1.U
+      }
+    } .otherwise {
+      io.in.ready := false.B
+      io.out.valid := false.B
+    }
+  }
+}
+
+
+class TaggedDecoupledIO[T <: Data](typ: T, maxNumElements: Int) extends Bundle {
+  val tag = UInt(log2Up(maxNumElements).W).asOutput
+  val ready = Bool().asInput
+  val valid = Bool().asOutput
+  val bits  = typ.chiselCloneType.asOutput
+
+  override def cloneType: this.type = new TaggedDecoupledIO(typ, maxNumElements).asInstanceOf[this.type]
+}
+
+object TaggedDecoupledIO {
+  def apply[T <: Data](typ: T, maxNumElements: Int): TaggedDecoupledIO[T] = new TaggedDecoupledIO(typ, maxNumElements)
+}
+
+class RevTaggedDecoupledIO[T <: Data](typ: T, maxNumElements: Int) extends Bundle {
+  val tag = UInt(log2Up(maxNumElements).W).asInput
+  val ready = Bool().asInput
+  val valid = Bool().asOutput
+  val bits  = typ.chiselCloneType.asOutput
+
+  override def cloneType: this.type = new RevTaggedDecoupledIO(typ, maxNumElements).asInstanceOf[this.type]
+}
+
+object RevTaggedDecoupledIO {
+  def apply[T <: Data](typ: T, maxNumElements: Int): RevTaggedDecoupledIO[T] = new RevTaggedDecoupledIO(typ, maxNumElements)
+}
+
+class TDIOMuxCP[T <: Data](typ: T, n: Int) extends Module {
+  val io = new Bundle {
+    // These "in" signals feed this module with tags and readies, expecting bits and valids back
+    val in = Vec(n, RevTaggedDecoupledIO(typ.cloneType, n))
+
+    // These are the consumer signals
+    val out = Vec(n, Decoupled(typ.cloneType)).flip
+
+    // Mon Jan 28 17:04:36 -02 2019: TODO: CONTINUE
+  }
+
+  val tagWidth = log2Up(n)
+  /*
+   * Things to verify:
+   * - For each producer
+   *   - Whether its tag matched anyone
+   * - For each consumer
+   *   - Whether it was matched by any producer
+   */
+
+  for (i <- 0 until n) {
+    val consumer = io.in(i)
+
+    var matchesByTheConsumer = new Array[Bool](n)
+
+    for (j <- 0 until n) {
+      val producer = io.out(j)
+
+      val tagMatch = consumer.tag === j.asUInt(tagWidth.W)
+
+      when(tagMatch) {
+        consumer.bits := producer.bits
+        consumer.valid := producer.valid
+        when (consumer.ready) {
+          producer.ready := true.B
+        }
+      }
+
+      matchesByTheConsumer(j) = tagMatch
+    }
+
+    val consumerMatchedSomeone = matchesByTheConsumer.reduce(_ || _)
+    when (!consumerMatchedSomeone) {
+      consumer.valid := false.B
+    }
+  }
+
+  for (i <- 0 until n) {
+    val producer = io.out(i)
+    var matchesToTheProducer = new Array[Bool](n)
+
+    for (j <- 0 until n) {
+      val consumer = io.in(j)
+      val tagMatch = (consumer.tag === i.asUInt(tagWidth.W)) && consumer.ready
+      matchesToTheProducer(j) = tagMatch
+    }
+
+    val producerWasMatchedBySomeone = matchesToTheProducer.reduce(_ || _)
+    when (!producerWasMatchedBySomeone) {
+      producer.ready := false.B
+    }
+  }
+}
+
+class TDIOMuxPC[T <: Data](typ: T, n: Int) extends Module {
+  val io = new Bundle {
+    // These "in" signals feed this module with tags, bits and valids, expecting readies back.
+    val in = Vec(n, TaggedDecoupledIO(typ.cloneType, n)).flip
+
+    // These are the producer signals
+    val out = Vec(n, Decoupled(typ.cloneType))
+  }
+
+  val tagWidth = log2Up(n)
+  /*
+   * Things to verify:
+   * - For each producer
+   *   - Whether its tag matched anyone
+   * - For each consumer
+   *   - Whether it was matched by any producer
+   */
+
+  for (i <- 0 until n) {
+    val producer = io.in(i)
+
+    var matchesByTheProducer = new Array[Bool](n)
+
+    for (j <- 0 until n) {
+      val consumer = io.out(j)
+
+      val tagMatch = producer.tag === j.asUInt(tagWidth.W)
+
+      when(tagMatch) {
+        consumer.bits := producer.bits
+        producer.ready := consumer.ready
+        when(producer.valid) {
+          consumer.valid := true.B
+        }
+      }
+
+      matchesByTheProducer(j) = tagMatch
+    }
+
+    val producerMatchedSomeone = matchesByTheProducer.reduce(_ || _)
+    when (!producerMatchedSomeone) {
+      producer.ready := false.B
+    }
+  }
+
+  for (i <- 0 until n) {
+    val consumer = io.out(i)
+    var matchesToTheConsumer = new Array[Bool](n)
+
+    for (j <- 0 until n) {
+      val producer = io.in(j)
+      val tagMatch = (producer.tag === i.asUInt(tagWidth.W)) && producer.valid
+      matchesToTheConsumer(j) = tagMatch
+    }
+
+    val consumerWasMatchedBySomeone = matchesToTheConsumer.reduce(_ || _)
+    when (!consumerWasMatchedBySomeone) {
+      consumer.valid := false.B
+    }
+  }
+}
+
+class ZeroPadder[T <: Data](typ: T, burstSizeWithZeros: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Decoupled(typ.cloneType).flip
+    val out = Decoupled(typ.cloneType)
+    val startPadding = Bool().asInput
+  })
+
+  val counter = RegInit(UInt(burstSizeWithZeros - 1))
+  val zeroLocked = RegEnable(true.B, false.B, io.startPadding)
+  val sendZero = Wire(Bool())
+  sendZero := zeroLocked || io.startPadding
+
+  when (sendZero) {
+    io.in.ready := false.B
+    io.out.valid := true.B
+    io.out.bits := 0.U
+  } .otherwise {
+    io.out <> io.in
+  }
+
+  when (io.out.fire()) {
+    when (counter > 0.U) {
+      counter := counter - 1.U
+    } .otherwise {
+      counter := UInt(burstSizeWithZeros - 1)
+      zeroLocked := false.B
+    }
+  }
+}

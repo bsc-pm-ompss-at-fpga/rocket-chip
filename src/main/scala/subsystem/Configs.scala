@@ -14,7 +14,7 @@ import freechips.rocketchip.util._
 
 class BaseSubsystemConfig extends Config ((site, here, up) => {
   // Tile parameters
-  case PgLevels => if (site(XLen) == 64) 3 /* Sv39 */ else 2 /* Sv32 */
+  case PgLevels => if (site(XLen) == 64) 4 /* Sv39 */ else 2 /* Sv32 */
   case XLen => 64 // Applies to all cores
   case MaxHartIdBits => log2Up(site(TilesLocated(InSubsystem)).map(_.tileParams.hartId).max+1)
   // Interconnect parameters
@@ -37,9 +37,11 @@ class BaseSubsystemConfig extends Config ((site, here, up) => {
     beatBytes = site(XLen)/8,
     blockBytes = site(CacheBlockBytes))
   // Additional device Parameters
+  case MaskROMLocated(InSubsystem)  => Some(MaskROMParams())
   case BootROMLocated(InSubsystem) => Some(BootROMParams(contentFileName = "./bootrom/bootrom.img"))
   case SubsystemExternalResetVectorKey => false
-  case DebugModuleKey => Some(DefaultDebugModuleParams(site(XLen)))
+  //case DebugModuleKey => None //DISABLE DEBUG
+  case DebugModuleKey => Some(DefaultDebugModuleParams(site(XLen))) //ENABLE DEBUG
   case CLINTKey => Some(CLINTParams())
   case PLICKey => Some(PLICParams())
   case TilesLocated(InSubsystem) => 
@@ -89,7 +91,9 @@ class WithNBigCores(n: Int, overrideIdOffset: Option[Int] = None) extends Config
     val prev = up(RocketTilesKey, site)
     val idOffset = overrideIdOffset.getOrElse(prev.size)
     val big = RocketTileParams(
-      core   = RocketCoreParams(mulDiv = Some(MulDivParams(
+      core   = RocketCoreParams(
+        haveCFlush = true,
+        mulDiv = Some(MulDivParams(
         mulUnroll = 8,
         mulEarlyOut = true,
         divEarlyOut = true))),
@@ -272,6 +276,10 @@ class WithNBreakpoints(hwbp: Int) extends Config ((site, here, up) => {
 })
 
 class WithRoccExample extends Config((site, here, up) => {
+  // This is a list of lambda functions.
+  //
+  // The HasLazyRoCC module at tile/LazyRoCC.scala use this list to build
+  // a list of LazyModules in agreement with system parameters active by then.
   case BuildRoCC => List(
     (p: Parameters) => {
         val accumulator = LazyModule(new AccumulatorExample(OpcodeSet.custom0, n = 4)(p))
@@ -326,6 +334,20 @@ class WithFPUWithoutDivSqrt extends Config((site, here, up) => {
 
 class WithBootROMFile(bootROMFile: String) extends Config((site, here, up) => {
   case BootROMLocated(x) => up(BootROMLocated(x), site).map(_.copy(contentFileName = bootROMFile))
+})
+
+
+class WithROMName(nameROM: String) extends Config((site, here, up) => {
+  case MaskROMLocated(x) => up(MaskROMLocated(x), site).map(_.copy(name = nameROM))
+})
+
+class WithROMSize(sizeROM: BigInt) extends Config((site, here, up) => {
+  case MaskROMLocated(x) => up(MaskROMLocated(x), site).map(_.copy(width = 32, depth=(sizeROM/4).toInt))
+})
+
+
+class WithROMLocation(locROM: BigInt) extends Config((site, here, up) => {
+  case MaskROMLocated(x) => up(MaskROMLocated(x), site).map(_.copy(address = locROM))
 })
 
 class WithSynchronousRocketTiles extends Config((site, here, up) => {
@@ -402,6 +424,12 @@ class WithDefaultMemPort extends Config((site, here, up) => {
                       idBits = 4), 1))
 })
 
+
+class WithExtMemLocation(n: BigInt) extends Config((site, here, up) => {
+  case ExtMem => up(ExtMem, site).map(x => x.copy(master = x.master.copy(base = n)))
+})
+
+
 class WithNoMemPort extends Config((site, here, up) => {
   case ExtMem => None
 })
@@ -413,6 +441,16 @@ class WithDefaultMMIOPort extends Config((site, here, up) => {
                       beatBytes = site(MemoryBusKey).beatBytes,
                       idBits = 4))
 })
+
+
+class WithMMIOLocation(n: BigInt) extends Config((site, here, up) => {
+  case ExtBus => up(ExtBus, site).map(x => x.copy(base = n))
+})
+class WithMMIOMemSize(n: BigInt) extends Config((site, here, up) => {
+  case ExtBus => up(ExtBus, site).map(x => x.copy(size = n))
+})
+
+
 
 class WithNoMMIOPort extends Config((site, here, up) => {
   case ExtBus => None

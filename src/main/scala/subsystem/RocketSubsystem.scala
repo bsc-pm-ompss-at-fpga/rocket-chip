@@ -30,7 +30,7 @@ trait HasRocketTiles extends HasTiles { this: BaseSubsystem =>
   val rocketTiles = tiles.collect { case r: RocketTile => r }
 
   def coreMonitorBundles = (rocketTiles map { t =>
-    t.module.core.rocketImpl.coreMonitorBundle
+	t.module.core.rocketImpl.coreMonitorBundle
   }).toList
 }
 
@@ -39,4 +39,4 @@ class RocketSubsystem(implicit p: Parameters) extends BaseSubsystem with HasRock
 }
 
 class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSubsystemModuleImp(_outer)
-    with HasTilesModuleImp
+	with HasTilesModuleImp

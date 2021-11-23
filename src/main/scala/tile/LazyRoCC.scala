@@ -11,7 +11,10 @@ import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.tilelink._
-import freechips.rocketchip.util.InOrderArbiter
+import freechips.rocketchip.util.{InOrderArbiter, RoutingInfo}
+import freechips.rocketchip.integrators.ReadyPacket
+
+import java.io._
 
 case object BuildRoCC extends Field[Seq[Parameters => LazyRoCC]](Nil)
 
@@ -51,6 +54,45 @@ class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p)
   val ptw = Vec(nPTWPorts, new TLBPTWIO)
   val fpu_req = Decoupled(new FPInput)
   val fpu_resp = Flipped(Decoupled(new FPResult))
+
+  //TODO: MAKE IT CLEANER AND BETTER FITTING
+  //      TO THE REST OF THE PARAMETRIZABLE
+  //      IO INFRASTRUCTURE
+  // FIXME Let routing info get information about the number of cores
+  // from elsewhere!
+  // FIXME Let tagWidth be set based on the number of cores!
+  val tag                     = Output(UInt(xLen.W))
+  val subQInterface           = Decoupled(UInt(32.W))
+  val subRequest              = Decoupled(RoutingInfo(64, 48))
+  val retInterface            = Decoupled(UInt(32.W))
+  val readyRequestInterface   = Decoupled(UInt(0.W))
+  val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
+  val pmException             = Flipped(UInt(4.W))
+}
+
+class CoreSubmissionUnit extends Bundle {
+  val packet0                     = UInt(32.W)
+  val packet1                     = UInt(32.W)
+  val packet2                     = UInt(32.W)
+
+  //override def cloneType = new SubmissionUnit
+  //override def cloneType = new CoreSubmissionUnit.asInstanceOf[this.type]
+}
+
+//object CoreSubmissionUnit {
+  //def apply() = new SubmissionUnit
+//}
+
+//class SubmissionUnit extends DecoupledIO(new CoreSubmissionUnit) {
+//  val packet0                     = UInt(32.W)
+//  val packet1                     = UInt(32.W)
+//  val packet2                     = UInt(32.W)
+//}
+
+class SubmissionUnit extends Bundle {
+  val packet0                     = UInt(32.W)
+  val packet1                     = UInt(32.W)
+  val packet2                     = UInt(32.W)
 }
 
 /** Base classes for Diplomatic TL2 RoCC units **/
@@ -395,39 +437,61 @@ object OpcodeSet {
   def all = custom0 | custom1 | custom2 | custom3
 }
 
-class bogus(implicit p: Parameters) extends LazyRoCC(opcodes) {
-  talksToPicos = true
+case object BlankField extends Field[Boolean]
+
+class BlankConfig extends Config((site, here, up) => {
+	case BlankField => false
+})
+
+object SimpleVerilogCompiler  {
+	def main(args: Array[String]): Unit = {
+		implicit val p: Parameters = new BlankConfig
+		var verilog = stage.ChiselStage.emitVerilog(  new freechips.rocketchip.integrators.CoreRealPicosManager(2, 16)(p)  )
+		val pw = new PrintWriter(new File("/tmp/source.v" ))
+		pw.write(verilog)
+		pw.close
+	}
+}
+
+class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes) {
+  //talksToPicos = true
   println("Hello from bogus!")
   override lazy val module = new bogusModule(this)
 }
 
-class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int = 24)(implicit p: Parameters) extends LazyRoCCModule(outer)
+class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int = 24)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
   with HasCoreParameters {
 
     // This register captures the index of the target
     // result register
-    val req_rd = Reg(io.resp.bits.rd)
+    // TODO: CHECK: MODIFIED FROM REG TO REGINIT IN 2021
+    val req_rd = RegInit(io.resp.bits.rd)
 
-    val s_idle :: s_work_request :: s_nanosid_fetch_work :: s_picosid_fetch_work :: s_submitting :: s_retiring :: s_sub_request :: s_submitting_three :: Nil = Enum(Bits(), 8)
-    val state = Reg(init = s_idle)
-    val busyWithSubmitThree = Reg(init = Bool(false))
+    val s_idle :: s_work_request :: s_nanosid_fetch_work :: s_picosid_fetch_work :: s_submitting :: s_retiring :: s_sub_request :: s_submitting_three :: Nil = Enum(8)
+    //val state = Reg(init = s_idle)
+    val state = RegInit(s_idle)
+    val busyWithSubmitThree = RegInit(false.B)
 
     // Do not generate interrupts
-    io.interrupt := Bool(false)
+    io.interrupt := false.B
 
     // For detecting the operation to perform
       val funct         = io.cmd.bits.inst.funct
-      val doSubmit      = funct === UInt(1)
-      val doNFetchWork  = funct === UInt(2)
-      val doRetire      = funct === UInt(3)
-      val doPFetchWork  = funct === UInt(4)
-      val doSubRequest  = funct === UInt(5)
-      val doWorkRequest = funct === UInt(6)
-      val doSubmitThree = funct === UInt(7)
+      val doSubmit      = funct === 1.U
+      val doNFetchWork  = funct === 2.U
+      val doRetire      = funct === 3.U
+      val doPFetchWork  = funct === 4.U
+      val doSubRequest  = funct === 5.U
+      val doWorkRequest = funct === 6.U
+      val doSubmitThree = funct === 7.U
 
     // Let the registers reset to 0
-    val x = Reg(UInt(width = xLen), init = UInt(0))
-    val tag = Reg(UInt(width = xLen), init = UInt(0))
+    //val x = Reg(UInt(width = xLen), init = UInt(0))
+    //val x = RegInit(UInt(value = 0, width = xLen))
+    val x = RegInit(0.asUInt(xLen.W))
+    //val tag = Reg(UInt(width = xLen), init = UInt(0))
+    //val tag = RegInit(UInt(value = 0, width = xLen))
+    val tag = RegInit(0.asUInt(xLen.W))
 
     // The module is always ready to receive data
     io.cmd.ready  := (state === s_idle)
@@ -476,11 +540,11 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
       }
 
     // Implements submission to SubQ
-      val fasterSubmitQueue                  = Module( new Queue(SubmissionUnit(), 16) )
+      val fasterSubmitQueue                  = Module (new Queue(new SubmissionUnit, 16))
       val sub_valid                          = (state === s_submitting)
       val submit_success                     = io.subQInterface.fire() && !busyWithSubmitThree
 
-			io.subQInterface.valid := ((state === s_submitting) && !busyWithSubmitThree) || (busyWithSubmitThree && fasterSubmitQueue.io.deq.valid)
+      io.subQInterface.valid := ((state === s_submitting) && !busyWithSubmitThree) || (busyWithSubmitThree && fasterSubmitQueue.io.deq.valid)
 
       when (state === s_submitting) {
         state                               := s_idle
@@ -508,16 +572,18 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
         io.resp.bits.data                   := Mux(submit3_success, 0.U, submissionError)
 
         when (submit3_success) {
-          busyWithSubmitThree               := Bool(true)
+          busyWithSubmitThree               := true.B
         }
       }
+      
+      fasterSubmitQueue.io.deq.ready := false.B
 
       when (busyWithSubmitThree) {
         when (fasterSubmitQueue.io.deq.valid) {
           when (packetsToSend === 3.U) {
 
             io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet0
-            fasterSubmitQueue.io.deq.ready := Bool(false)
+            fasterSubmitQueue.io.deq.ready := false.B
 
             when (io.subQInterface.fire()) {
               packetsToSend := 2.U
@@ -526,7 +592,7 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
           } .elsewhen (packetsToSend === 2.U) {
 
             io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet1
-            fasterSubmitQueue.io.deq.ready := Bool(false)
+            fasterSubmitQueue.io.deq.ready := false.B
 
             when (io.subQInterface.fire()) {
               packetsToSend := 1.U
@@ -535,16 +601,16 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
           } .elsewhen (packetsToSend === 1.U) {
 
             io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet2
-            fasterSubmitQueue.io.deq.ready := Bool(false)
+            fasterSubmitQueue.io.deq.ready := false.B
 
             when (io.subQInterface.fire()) {
               packetsToSend := 3.U
-              fasterSubmitQueue.io.deq.ready := Bool(true)
+              fasterSubmitQueue.io.deq.ready := true.B
             }
           }
         } .otherwise {
-          busyWithSubmitThree := Bool(false)
-          fasterSubmitQueue.io.deq.ready := Bool(false)
+          busyWithSubmitThree := false.B
+          fasterSubmitQueue.io.deq.ready := false.B
         }
       }
       
@@ -620,7 +686,7 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
     io.resp.bits.rd     := req_rd
 
     // We never issue memory requests
-    io.mem.req.valid  := Bool(false)
+    io.mem.req.valid  := false.B
 }
 
 class RoccCommandRouter(opcodes: Seq[OpcodeSet])(implicit p: Parameters)
