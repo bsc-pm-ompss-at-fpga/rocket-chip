@@ -104,6 +104,7 @@ abstract class LazyRoCC(
   val module: LazyRoCCModuleImp
   val atlNode: TLNode = TLIdentityNode()
   val tlNode: TLNode = TLIdentityNode()
+  var talksToPicos: Boolean = false
 }
 
 class LazyRoCCModuleImp(outer: LazyRoCC) extends LazyModuleImp(outer) {
@@ -124,6 +125,18 @@ trait HasLazyRoCC extends CanHavePTW { this: BaseTile =>
 
 trait HasLazyRoCCModule extends CanHavePTWModule
     with HasCoreParameters { this: RocketTileModuleImp with HasFpuOpt =>
+      
+
+  // TODO: IT SEEMS THAT PORTS CONNECTING BOGUS ACCS TO PICOS MANAGER SHOULD BE DEFINED HERE
+	val delegate = IO(new Bundle {
+	  val tag                     = Output(UInt(xLen.W))
+	  val subQInterface           = Decoupled(UInt(32.W))
+	  val subRequest              = Decoupled(RoutingInfo(64, 48))
+	  val retInterface            = Decoupled(UInt(32.W))
+	  val readyRequestInterface   = Decoupled(UInt(0.W))
+	  val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
+	  val pmException             = Output(UInt(4.W))
+	})
 
   val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
     val respArb = Module(new RRArbiter(new RoCCResponse()(outer.p), outer.roccs.size))
@@ -455,6 +468,7 @@ object SimpleVerilogCompiler  {
 
 class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes) {
   //talksToPicos = true
+  talksToPicos = true
   println("Hello from bogus!")
   override lazy val module = new bogusModule(this)
 }
