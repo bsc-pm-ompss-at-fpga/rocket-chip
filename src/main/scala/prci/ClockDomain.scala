@@ -3,21 +3,91 @@ package freechips.rocketchip.prci
 import chisel3._
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
+import chisel3.util._
+import freechips.rocketchip.util.{RoutingInfo}
+import freechips.rocketchip.integrators.ReadyPacket
+import freechips.rocketchip.tile.{TilePRCIDomain, RocketTile, BaseTile}
+import freechips.rocketchip.subsystem.RocketSubsystem
+import freechips.rocketchip.tile.TileResetDomain
+import freechips.rocketchip.aop._
+import firrtl.transforms.DontTouchAllTargets
+import freechips.rocketchip.util.DontTouch
 
-abstract class Domain(implicit p: Parameters) extends LazyModule with HasDomainCrossing {
-  def clockBundle: ClockBundle
+class DelegateIO extends Bundle {
+  val tag                     = Output(UInt(64.W))
+  val subQInterface           = Decoupled(UInt(32.W))
+  val subRequest              = Decoupled(RoutingInfo(64, 48))
+  val retInterface            = Decoupled(UInt(32.W))
+  val readyRequestInterface   = Decoupled(UInt(0.W))
+  val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
+  val pmException             = Output(UInt(4.W))
+}
 
-  lazy val module = new LazyRawModuleImp(this) {
-    childClock := clockBundle.clock
-    childReset := clockBundle.reset
+class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
+    childClock := wrapper.clockBundle.clock
+    childReset := wrapper.clockBundle.reset
 
     // these are just for backwards compatibility with external devices
     // that were manually wiring themselves to the domain's clock/reset input:
-    val clock = IO(Output(chiselTypeOf(clockBundle.clock)))
-    val reset = IO(Output(chiselTypeOf(clockBundle.reset)))
-    clock := clockBundle.clock
-    reset := clockBundle.reset
-  }
+    val clock = IO(Output(chiselTypeOf(wrapper.clockBundle.clock)))
+    val reset = IO(Output(chiselTypeOf(wrapper.clockBundle.reset)))
+  
+    val delegate = IO(new DelegateIO)
+
+    clock := wrapper.clockBundle.clock
+    reset := wrapper.clockBundle.reset
+    
+    if (wrapper.className == "TileResetDomain") {
+        dontTouch(delegate)
+
+        println("[DomainImp]: Hello! I am a TileResetDomain!")
+
+        val tileResetDomainChildren = wrapper.getChildren
+        println(s"[DomainImp tileResetDomainChildren]: ${tileResetDomainChildren}")
+
+        val rocketTileDelegate = tileResetDomainChildren.last.asInstanceOf[RocketTile].module.delegate
+
+        delegate.tag := rocketTileDelegate.tag
+        delegate.pmException := rocketTileDelegate.pmException
+        rocketTileDelegate.readyQInterface <> delegate.readyQInterface
+        delegate.subQInterface <> rocketTileDelegate.subQInterface
+        delegate.retInterface <> rocketTileDelegate.retInterface
+        delegate.subRequest <> rocketTileDelegate.subRequest
+        delegate.readyRequestInterface <> rocketTileDelegate.readyRequestInterface
+
+    } else if (wrapper.className == "TilePRCIDomain") {
+        dontTouch(delegate)
+
+        println("[DomainImp]: Hello! I am a TilePRCIDomain!")
+        println(s"[DomainImp aop.Select.ios(tile.module)]: ${aop.Select.ios(wrapper.tile.module)}")
+        println(s"[DomainImp wrapper.getChildren]: ${wrapper.getChildren}")
+        val tileResetDomain: TileResetDomain = wrapper.getChildren.last.asInstanceOf[TileResetDomain]
+        val tileResetDomainIOs = aop.Select.ios(tileResetDomain.module)
+        println(s"[DomainImp tileResetDomainIOs]: ${tileResetDomainIOs}")
+
+        val tileResetDomainDelegate : DelegateIO = tileResetDomainIOs.last.asInstanceOf[DelegateIO]
+
+        val rocketTileIOs = aop.Select.ios(wrapper.tile.module)
+        val numIO = aop.Select.ios(wrapper.tile.module).length
+        val rocketTileDelegate = rocketTileIOs(numIO - 1)
+
+        delegate.tag := tileResetDomainDelegate.tag
+        delegate.pmException := tileResetDomainDelegate.pmException
+        tileResetDomainDelegate.readyQInterface <> delegate.readyQInterface
+        delegate.subQInterface <> tileResetDomainDelegate.subQInterface
+        delegate.retInterface <> tileResetDomainDelegate.retInterface
+        delegate.subRequest <> tileResetDomainDelegate.subRequest
+        delegate.readyRequestInterface <> tileResetDomainDelegate.readyRequestInterface
+    }
+}
+
+abstract class Domain(implicit p: Parameters) extends LazyModule with HasDomainCrossing {
+  def clockBundle: ClockBundle
+  var tile: BaseTile = null
+  
+  println(s"[Domain:{this,this.className}]: ${this}, ${this.className}")
+
+  lazy val module = new DomainImp(this)
 }
 
 abstract class ClockDomain(implicit p: Parameters) extends Domain with HasClockDomainCrossing

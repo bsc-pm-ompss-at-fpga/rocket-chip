@@ -15,6 +15,7 @@ import freechips.rocketchip.rocket._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
 import freechips.rocketchip.prci.{ClockSinkParameters}
+import freechips.rocketchip.prci.Domain
 
 case object TileVisibilityNodeKey extends Field[TLEphemeralNode]
 case object TileKey extends Field[TileParams]
@@ -191,6 +192,9 @@ abstract class BaseTile private (val crossing: ClockCrossingType, q: Parameters)
   def ceaseNode: IntOutwardNode       // Tile has ceased to retire instructions
   def wfiNode: IntOutwardNode         // Tile is waiting for an interrupt
 
+  var parentSubsystem: RocketSubsystem = null
+  var parentPRCITile: Domain = null
+  var obviousId: Int = -1
   protected val tlOtherMastersNode = TLIdentityNode()
   protected val tlMasterXbar = LazyModule(new TLXbar)
   protected val tlSlaveXbar = LazyModule(new TLXbar)

@@ -15,6 +15,9 @@ import freechips.rocketchip.util.{InOrderArbiter, RoutingInfo}
 import freechips.rocketchip.integrators.ReadyPacket
 
 import java.io._
+import freechips.rocketchip.subsystem.RocketSubsystem
+import freechips.rocketchip.integrators._
+import freechips.rocketchip.prci.DelegateIO
 
 case object BuildRoCC extends Field[Seq[Parameters => LazyRoCC]](Nil)
 
@@ -67,7 +70,7 @@ class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p)
   val retInterface            = Decoupled(UInt(32.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
-  val pmException             = Flipped(UInt(4.W))
+  val pmException             = Output(UInt(4.W))
 }
 
 class CoreSubmissionUnit extends Bundle {
@@ -94,6 +97,10 @@ class SubmissionUnit extends Bundle {
   val packet1                     = UInt(32.W)
   val packet2                     = UInt(32.W)
 }
+
+// class BlackBoxPicosManager extends BlackBox() {
+//   val io = IO(new RealManagerIO(4))
+// }
 
 /** Base classes for Diplomatic TL2 RoCC units **/
 abstract class LazyRoCC(
@@ -125,18 +132,34 @@ trait HasLazyRoCC extends CanHavePTW { this: BaseTile =>
 
 trait HasLazyRoCCModule extends CanHavePTWModule
     with HasCoreParameters { this: RocketTileModuleImp with HasFpuOpt =>
-      
+  
+val delegate = IO(new DelegateIO)
 
-  // TODO: IT SEEMS THAT PORTS CONNECTING BOGUS ACCS TO PICOS MANAGER SHOULD BE DEFINED HERE
-	val delegate = IO(new Bundle {
-	  val tag                     = Output(UInt(xLen.W))
-	  val subQInterface           = Decoupled(UInt(32.W))
-	  val subRequest              = Decoupled(RoutingInfo(64, 48))
-	  val retInterface            = Decoupled(UInt(32.W))
-	  val readyRequestInterface   = Decoupled(UInt(0.W))
-	  val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
-	  val pmException             = Output(UInt(4.W))
-	})
+	dontTouch(delegate)
+	
+
+  val accsTalkingToPicos = outer.roccs.filter(_.talksToPicos)
+  require(accsTalkingToPicos.length == 1, "More than one LazyRoCC was found to be talking to Picos")
+  println(s"We found ${accsTalkingToPicos.length} RoCC accelerators talking to Picos Manager in this Tile")
+  val picosMate = accsTalkingToPicos(0)
+
+  delegate.subQInterface <> picosMate.module.io.subQInterface
+  delegate.subRequest <> picosMate.module.io.subRequest
+  delegate.retInterface <> picosMate.module.io.retInterface
+  delegate.readyRequestInterface <> picosMate.module.io.readyRequestInterface
+  delegate.tag := picosMate.module.io.tag
+  picosMate.module.io.readyQInterface <> delegate.readyQInterface
+  delegate.pmException := picosMate.module.io.pmException
+  
+  val tileId = outer.obviousId
+  
+//   try {
+// 	// TODO: TEST 2021-11-25__16-34-44
+// 	outer.parentPRCITile.module.delegate.tag := delegate.tag
+// 	outer.parentPRCITile.module.delegate.subQInterface.bits := 22.U
+//   } catch {
+//   	case e:Exception => 
+//   }
 
   val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
     val respArb = Module(new RRArbiter(new RoCCResponse()(outer.p), outer.roccs.size))
@@ -453,21 +476,20 @@ object OpcodeSet {
 case object BlankField extends Field[Boolean]
 
 class BlankConfig extends Config((site, here, up) => {
-	case BlankField => false
+        case BlankField => false
 })
 
 object SimpleVerilogCompiler  {
-	def main(args: Array[String]): Unit = {
-		implicit val p: Parameters = new BlankConfig
-		var verilog = stage.ChiselStage.emitVerilog(  new freechips.rocketchip.integrators.CoreRealPicosManager(2, 16)(p)  )
-		val pw = new PrintWriter(new File("/tmp/source.v" ))
-		pw.write(verilog)
-		pw.close
-	}
+        def main(args: Array[String]): Unit = {
+                implicit val p: Parameters = new BlankConfig
+                var verilog = stage.ChiselStage.emitVerilog(  new freechips.rocketchip.integrators.CoreRealPicosManager(2, 16)(p)  )
+                val pw = new PrintWriter(new File("/tmp/source.v" ))
+                pw.write(verilog)
+                pw.close
+        }
 }
 
 class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes) {
-  //talksToPicos = true
   talksToPicos = true
   println("Hello from bogus!")
   override lazy val module = new bogusModule(this)

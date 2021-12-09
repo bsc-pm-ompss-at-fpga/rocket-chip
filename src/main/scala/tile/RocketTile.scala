@@ -14,6 +14,7 @@ import freechips.rocketchip.rocket._
 import freechips.rocketchip.subsystem.TileCrossingParamsLike
 import freechips.rocketchip.util._
 import freechips.rocketchip.prci.{ClockSinkParameters}
+import freechips.rocketchip.integrators.ReadyPacket
 
 
 case class RocketTileParams(
@@ -55,6 +56,8 @@ class RocketTile private(
   val intOutwardNode = IntIdentityNode()
   val slaveNode = TLIdentityNode()
   val masterNode = visibilityNode
+  
+  
 
   override val logicalTreeNode = new RocketLogicalTreeNode(this, p(XLen), pgLevels)
 

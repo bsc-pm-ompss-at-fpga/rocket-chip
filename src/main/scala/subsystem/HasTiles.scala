@@ -14,7 +14,6 @@ import freechips.rocketchip.tile.{BaseTile, LookupByHartIdImpl, TileParams, Inst
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.prci.{ClockGroup, ResetCrossingType}
 import freechips.rocketchip.util._
-import freechips.rocketchip.integrators._
 
 /** Entry point for Config-uring the presence of Tiles */
 case class TilesLocated(loc: HierarchicalLocation) extends Field[Seq[CanAttachTile]](Nil)
@@ -251,7 +250,10 @@ trait CanAttachTile {
   def instantiate(implicit p: Parameters): TilePRCIDomain[TileType] = {
     val clockSinkParams = tileParams.clockSinkParams.copy(name = Some(s"${tileParams.name.getOrElse("core")}_${tileParams.hartId}"))
     val tile_prci_domain = LazyModule(new TilePRCIDomain[TileType](clockSinkParams, crossingParams) { self =>
-      val tile = self.tile_reset_domain { LazyModule(tileParams.instantiate(crossingParams, lookup)) }
+      tile = self.tile_reset_domain {
+	      val instantiated_tile = LazyModule(tileParams.instantiate(crossingParams, lookup))
+		instantiated_tile
+	}
     })
     tile_prci_domain
   }
@@ -419,27 +421,6 @@ trait HasTilesModuleImp extends LazyModuleImp with HasPeripheryDebugModuleImp {
 
   val reset_vector = outer.tileResetVectorIONodes.zipWithIndex.map { case (n, i) => n.makeIO(s"reset_vector_$i") }
   val tile_hartids = outer.tileHartIdIONodes.zipWithIndex.map { case (n, i) => n.makeIO(s"tile_hartids_$i") }
-  
-  val picosIO = IO(new Bundle {
-	val picosFinishedInterface  = new PicosFifoBundle(UInt(32.W))
-	val picosReadyInterface     = new PicosReadyBundle(UInt(32.W))
-	val picosSubInterface       = new PicosFifoBundle(UInt(32.W))
-	val pmException             = UInt(4.W).asOutput
-  })
-
-  val pmanager = Module(new CoreRealPicosManager(outer.nTiles))
-//   pmanager.io.subQInterface <> outer.coreplex.module.io.subQInterface
-//   pmanager.io.subRequest <> outer.coreplex.module.io.subRequest
-//   pmanager.io.retInterface <> outer.coreplex.module.io.retInterface
-//   pmanager.io.readyRequestInterface <> outer.coreplex.module.io.readyRequestInterface
-//   pmanager.io.tag := outer.coreplex.module.io.tag
-//   outer.coreplex.module.io.readyQInterface <> pmanager.io.readyQInterface
-//   outer.coreplex.module.io.pmException <> pmanager.io.pmException
-
-  picosIO.picosSubInterface <> pmanager.io.picosSubInterface
-  picosIO.picosReadyInterface <> pmanager.io.picosReadyInterface
-  picosIO.picosFinishedInterface <> pmanager.io.picosFinishedInterface
-  picosIO.pmException := pmanager.io.pmException
 
   val meip = if(outer.meipNode.isDefined) Some(IO(Vec(outer.meipNode.get.out.size, Bool()).asInput)) else None
   meip.foreach { m =>

@@ -11,6 +11,10 @@ import freechips.rocketchip.rocket.{TracedInstruction}
 import freechips.rocketchip.subsystem.{TileCrossingParamsLike, CrossesToOnlyOneResetDomain}
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util.{TraceCoreInterface}
+import chisel3._
+import chisel3.util._
+import freechips.rocketchip.util.RoutingInfo
+import freechips.rocketchip.integrators.ReadyPacket
 
 /** A wrapper containing all logic within a managed reset domain for a tile.
   *
@@ -21,6 +25,7 @@ class TileResetDomain(clockSinkParams: ClockSinkParameters, resetCrossingType: R
     extends ResetDomain
     with CrossesToOnlyOneResetDomain
 { 
+
   def crossing = resetCrossingType
   val clockNode = ClockSinkNode(Seq(clockSinkParams))
   def clockBundle = clockNode.in.head._1
@@ -41,7 +46,6 @@ abstract class TilePRCIDomain[T <: BaseTile](
   (implicit p: Parameters)
     extends ClockDomain
 {
-  val tile: T
   val tile_reset_domain = LazyModule(new TileResetDomain(clockSinkParams, crossingParams.resetCrossingType))
   val tapClockNode = ClockIdentityNode()
   val clockNode = FixedClockBroadcast(None) :=* tapClockNode
