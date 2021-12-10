@@ -169,22 +169,28 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	picosReadyInterfacePop := picosReadyInterfaceNotEmpty && (wf_counter === 0.U || wf_counter === 2.U || wf_counter === 4.U || wf_counter === 6.U)
 
 	when (canProceed) {
-					when (wf_counter === 1.U || wf_counter === 3.U || wf_counter === 5.U) {
-									wf_xor := wf_xor ^ picosReadyInterfaceBits
-									} .otherwise {
-													when (wf_counter === 7.U) {
-																	when (wf_xor =/= picosReadyInterfaceBits) {
-																					exceptionReg := exceptionReg | 2.U 
-																	}
-																	wf_xor := 0.U
-													}
-									}
+		when (wf_counter === 1.U || wf_counter === 3.U || wf_counter === 5.U) {
+			wf_xor := wf_xor ^ picosReadyInterfaceBits
+		} .otherwise {
+			when (wf_counter === 7.U) {
+				when (wf_xor =/= picosReadyInterfaceBits) {
+								exceptionReg := exceptionReg | 2.U 
+				}
+				wf_xor := 0.U
+			}
+		}
 
-									wf_counter := wf_counter + 1.U 
+		// The following change makes the system compatible with a 3-packet ready-task description
+		// wf_counter := wf_counter + 1.U 
+		when (wf_counter < 5.U) {
+			wf_counter := wf_counter + 1.U 
+		} .otherwise {
+			wf_counter := 0.U
+		}
 	}
 
 	when (wf_counter > 0.U && !picosReadyInterfaceNotEmpty) {
-					exceptionReg := exceptionReg | 1.U 
+		exceptionReg := exceptionReg | 1.U 
 	}
 
 	// Implement submission interactions
