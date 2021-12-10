@@ -77,30 +77,13 @@ class CoreSubmissionUnit extends Bundle {
   val packet0                     = UInt(32.W)
   val packet1                     = UInt(32.W)
   val packet2                     = UInt(32.W)
-
-  //override def cloneType = new SubmissionUnit
-  //override def cloneType = new CoreSubmissionUnit.asInstanceOf[this.type]
 }
-
-//object CoreSubmissionUnit {
-  //def apply() = new SubmissionUnit
-//}
-
-//class SubmissionUnit extends DecoupledIO(new CoreSubmissionUnit) {
-//  val packet0                     = UInt(32.W)
-//  val packet1                     = UInt(32.W)
-//  val packet2                     = UInt(32.W)
-//}
 
 class SubmissionUnit extends Bundle {
   val packet0                     = UInt(32.W)
   val packet1                     = UInt(32.W)
   val packet2                     = UInt(32.W)
 }
-
-// class BlackBoxPicosManager extends BlackBox() {
-//   val io = IO(new RealManagerIO(4))
-// }
 
 /** Base classes for Diplomatic TL2 RoCC units **/
 abstract class LazyRoCC(
@@ -152,14 +135,6 @@ val delegate = IO(new DelegateIO)
   delegate.pmException := picosMate.module.io.pmException
   
   val tileId = outer.obviousId
-  
-//   try {
-// 	// TODO: TEST 2021-11-25__16-34-44
-// 	outer.parentPRCITile.module.delegate.tag := delegate.tag
-// 	outer.parentPRCITile.module.delegate.subQInterface.bits := 22.U
-//   } catch {
-//   	case e:Exception => 
-//   }
 
   val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
     val respArb = Module(new RRArbiter(new RoCCResponse()(outer.p), outer.roccs.size))
@@ -667,7 +642,7 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
         val wr_valid                    = (state === s_work_request)
         val wr_success                  = io.readyRequestInterface.fire()
 
-        io.readyRequestInterface.valid  := (state === s_work_request) && (pendingRequestsCounter === 0.asUInt(xLen.W))
+        io.readyRequestInterface.valid  := (state === s_work_request)
 
         when (state === s_work_request) {
           io.resp.bits.data          := Mux(wr_success, increasedCounterVal, pendingRequestsCounter)
