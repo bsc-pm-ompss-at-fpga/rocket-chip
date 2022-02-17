@@ -155,20 +155,25 @@ object RoutingInfo {
   def apply(arbN: Int, maxBurstLength: Int): RoutingInfo = new RoutingInfo(arbN, maxBurstLength)
 }
 
-class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int) extends Module {
+class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int, numDownCycles: Int) extends Module {
   val io = IO(new Bundle {
     val in = Vec(arbN, Decoupled(typ.cloneType)).flip
     val out = Decoupled(typ.cloneType)
     val routingInfo = Decoupled(RoutingInfo(arbN, maxBurstLength)).flip
+    val enabled = Bool().asInput
   })
 
   val chosen = RegEnable(io.routingInfo.bits.arbID, io.routingInfo.fire())
   val burstCounter = RegInit(0.U(log2Ceil(maxBurstLength).W))
+  val remainingDownCycles = RegInit(0.U(10.W))
 
-  io.out.valid := (burstCounter > 0.U && io.in(chosen).valid)
+  io.out.valid := (burstCounter > 0.U) && io.in(chosen).valid
   io.out.bits := io.in(chosen).bits
 
   when (io.out.fire()) {
+    when (burstCounter === 1.U) {
+      remainingDownCycles := numDownCycles.U
+    }
     burstCounter := burstCounter - 1.U
   }
 
@@ -176,7 +181,11 @@ class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int) extends M
     burstCounter := io.routingInfo.bits.numPackets
   }
 
-  io.routingInfo.ready := burstCounter === 0.U
+  when (remainingDownCycles > 0.U) {
+      remainingDownCycles := remainingDownCycles - 1.U
+  }
+
+  io.routingInfo.ready := (burstCounter === 0.U) && (remainingDownCycles === 0.U) && io.enabled
 
   for (i <- 0 until arbN) {
     io.in(i).ready := io.out.ready && chosen === i.U && burstCounter > 0.U

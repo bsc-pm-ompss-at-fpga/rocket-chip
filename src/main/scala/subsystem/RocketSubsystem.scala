@@ -44,6 +44,7 @@ trait HasRocketTiles extends HasTiles { this: BaseSubsystem =>
 
 class RocketSubsystem(implicit p: Parameters) extends BaseSubsystem with HasRocketTiles {
   println(s"[RocketSubsystem]: The current system has ${nTiles} tiles.")
+  println(s"[RocketSubsystem]: The hartID list is the following: ${hartIdList}")
   override lazy val module = new RocketSubsystemModuleImp(this)
   
   tiles.zipWithIndex.foreach{case (tile, i) => 

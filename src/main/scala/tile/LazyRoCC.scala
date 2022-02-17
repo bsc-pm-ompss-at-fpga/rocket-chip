@@ -467,6 +467,7 @@ object SimpleVerilogCompiler  {
 class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes) {
   talksToPicos = true
   println("Hello from bogus!")
+  println(s"[bogus]: Maximum number of bits that hartIDs might take: ${p(MaxHartIdBits)}")
   override lazy val module = new bogusModule(this)
 }
 
@@ -482,6 +483,9 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
     //val state = Reg(init = s_idle)
     val state = RegInit(s_idle)
     val busyWithSubmitThree = RegInit(false.B)
+    
+    val subRequestCount = RegInit(0.U(64.W))
+    val retirementCount = RegInit(0.U(64.W))
 
     // Do not generate interrupts
     io.interrupt := false.B
@@ -495,6 +499,27 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
       val doSubRequest  = funct === 5.U
       val doWorkRequest = funct === 6.U
       val doSubmitThree = funct === 7.U
+
+      /*
+       * These debug counters track how many types
+       * various events have happened
+       */
+      /*
+      val debug_subSuccessCount = RegInit(0.U(32.W))
+      val debug_subFailureCount = RegInit(0.U(32.W))
+      val debug_nanosFetchRequestSuccessCount = RegInit(0.U(32.W))
+      val debug_nanosFetchRequestFailureCount = RegInit(0.U(32.W))
+      val debug_retirementSuccessCount = RegInit(0.U(32.W))
+      val debug_retirementFailureCount = RegInit(0.U(32.W))
+      val debug_picosFetchRequestSuccessCount = RegInit(0.U(32.W))
+      val debug_picosFetchRequestFailureCount = RegInit(0.U(32.W))
+      val debug_subRequestSuccessCount = RegInit(0.U(32.W))
+      val debug_subRequestFailureCount = RegInit(0.U(32.W))
+      val debug_workRequestSuccessCount = RegInit(0.U(32.W))
+      val debug_workRequestFailureCount = RegInit(0.U(32.W))
+      val debug_submitThreeSuccessCount = RegInit(0.U(32.W))
+      val debug_submitThreeFailureCount = RegInit(0.U(32.W))
+      */
 
     // Let the registers reset to 0
     //val x = Reg(UInt(width = xLen), init = UInt(0))
@@ -541,9 +566,18 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
       io.tag                        := tag
       io.subRequest.bits.numPackets := x
       io.subRequest.bits.arbID      := tag
+      //FIXME: The following should not work because both subRequestCount and retirementCount only take core-specific
+      //       events into account.
+      //io.subRequest.valid           := (state === s_sub_request) && (subRequestCount < retirementCount + 256.U(64.W))
       io.subRequest.valid           := (state === s_sub_request)
 
+      val inflightCountUpperBound = dontTouch(Wire(UInt(64.W)))
+      inflightCountUpperBound := subRequestCount - retirementCount
+
       val sub_request_success        = io.subRequest.fire()
+      when (io.subRequest.fire()) {
+        subRequestCount := subRequestCount +  1.U(64.W)
+      }
 
       when (state === s_sub_request) {
         state := s_idle
@@ -684,7 +718,10 @@ class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int 
     // Implements retirement
       io.retInterface.bits  := x
       io.retInterface.valid := (state === s_retiring)
-      when (io.retInterface.fire()) { state := s_idle }
+      when (io.retInterface.fire()) {
+        state := s_idle
+        retirementCount := retirementCount + 1.U(64.W)
+      }
 
     // Write data to the reply register if
     // any rd-writing instruction has been

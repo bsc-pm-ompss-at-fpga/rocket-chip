@@ -6,6 +6,7 @@ import Chisel._
 import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, ZeroPadder, DelayerAdapter, TDIOMuxPC}
 import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
+import chisel3.dontTouch
 
 class ReadyPacket extends Bundle {
 				val nanosID                     = UInt(64.W)
@@ -47,22 +48,33 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(32.W), burstSizeWithZe
 				val pmException               = UInt(4.W).asOutput
 }
 
-class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48) extends Module {
+class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
 				val io = IO(new Bundle {
 								val tag                   = Flipped(Vec(nCores, UInt(64.W).asOutput))
 								val subQInterface         = Flipped(Vec(nCores, Decoupled(typ.cloneType)))
 								val subRequest            = Flipped(Vec(nCores, Decoupled(RoutingInfo(nCores, burstSizeWithZeros))))
 								val picosSubMaster        = Decoupled(typ.cloneType)
+								val numStartedSubmissions = UInt(64.W).asOutput
+								val enabled               = Bool().asInput
 				})
 
 				val taggedMuxPC = Module(new TDIOMuxPC(typ.cloneType, nCores))
 				val routingRequestArbiter = Module(new RRArbiter(RoutingInfo(nCores, burstSizeWithZeros), nCores))
-				val guidedArbiter = Module(new GuidedArbiter(typ.cloneType, nCores, burstSizeWithZeros))
+				val guidedArbiter = Module(new GuidedArbiter(typ.cloneType, nCores, burstSizeWithZeros, numDownCycles))
+				guidedArbiter.io.enabled := io.enabled
 
 				val routingQ = Module(new Queue(RoutingInfo(nCores, burstSizeWithZeros), routingQDepth))
+				dontTouch(routingQ.io.count)
+
+				val routingQEnqCounter = dontTouch(RegInit(0.U(64.W)))
+				routingQEnqCounter := Mux(routingQ.io.enq.fire(), routingQEnqCounter + 1.U, routingQEnqCounter)
+				val routingQDeqCounter = dontTouch(RegInit(0.U(64.W)))
+				routingQDeqCounter := Mux(routingQ.io.deq.fire(), routingQDeqCounter + 1.U, routingQDeqCounter)
+
 				val zeroPadder = Module (new ZeroPadder(typ.cloneType, burstSizeWithZeros))
 
-				val finalBuffer = Module (new Queue(typ.cloneType, burstSizeWithZeros))
+				//val finalBuffer = Module (new Queue(typ.cloneType, burstSizeWithZeros))
+				val finalBuffer = Module (new Queue(typ.cloneType, 1))
 
 				val waitingForRoutingPacket = guidedArbiter.io.routingInfo.ready
 				val waitingForNewBurst = RegEnable(!routingQ.io.deq.fire(), true.B, waitingForRoutingPacket)
@@ -71,6 +83,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int 
 								waitingForNewBurst := false.B
 				}
 
+				/*
 				val remaining_packets_this_burst = RegInit(UInt(burstSizeWithZeros))
 
 				when (finalBuffer.io.enq.fire()) {
@@ -88,6 +101,9 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int 
 				zeroPadder.io.in <> guidedArbiter.io.out
 				zeroPadder.io.startPadding := waitingForRoutingPacket && !waitingForNewBurst && remaining_packets_this_burst > 0.U
 				finalBuffer.io.enq <> zeroPadder.io.out
+				*/
+
+				io.numStartedSubmissions := routingQDeqCounter
 
 				routingRequestArbiter.io.in <> io.subRequest
 				routingQ.io.enq <> routingRequestArbiter.io.out
@@ -96,20 +112,39 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int 
 				val coreSpecificQueues = Vec(Seq.fill(nCores) { Module(new Queue(typ.cloneType, 4 * burstSizeWithZeros)).io })
 
 				for (i <- 0 until nCores) {
-								coreSpecificQueues(i).enq <> io.subQInterface(i)
-								guidedArbiter.io.in(i) <> coreSpecificQueues(i).deq
+								 coreSpecificQueues(i).enq <> io.subQInterface(i)
+								 guidedArbiter.io.in(i) <> coreSpecificQueues(i).deq
 				}
-
+        
 				val delayerAdapter = Module(new DelayerAdapter(typ.cloneType))
-				delayerAdapter.io.in <> finalBuffer.io.deq
+				val delayerAdapterPushCounter = dontTouch(RegInit(0.U(64.W)))
+				delayerAdapterPushCounter := Mux(delayerAdapter.io.in.fire(), delayerAdapterPushCounter + 1.U, delayerAdapterPushCounter)
+				val delayerAdapterPopCounter = dontTouch(RegInit(0.U(64.W)))
+				delayerAdapterPopCounter := Mux(delayerAdapter.io.out.fire(), delayerAdapterPopCounter + 1.U, delayerAdapterPopCounter)
+
+				//delayerAdapter.io.in <> finalBuffer.io.deq
+				delayerAdapter.io.in <> guidedArbiter.io.out
 				io.picosSubMaster <> delayerAdapter.io.out
 }
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
 	val io = IO(new RealManagerIO(nCores))
 	val ret_arbiter = Module(new RRArbiter(UInt(32.W), nCores))
-	val roccReadyQueue = Module( new Queue(new ReadyPacket, 260) )
+
+	val roccReadyQueue = Module( new Queue(new ReadyPacket, 257 * 3) )
+	dontTouch(roccReadyQueue.io.count)
+	val roccReadyQueueEnqCounter = dontTouch(RegInit(0.U(64.W)))
+	roccReadyQueueEnqCounter := Mux(roccReadyQueue.io.enq.fire(), roccReadyQueueEnqCounter + 1.U, roccReadyQueueEnqCounter)
+	val roccReadyQueueDeqCounter = dontTouch(RegInit(0.U(64.W)))
+	roccReadyQueueDeqCounter := Mux(roccReadyQueue.io.deq.fire(), roccReadyQueueDeqCounter + 1.U, roccReadyQueueDeqCounter)
+
 	val retQ = Module( new Queue(UInt(32.W), qDepth) )
+	dontTouch(retQ.io.count)
+	val retQEnqCounter = dontTouch(RegInit(0.U(64.W)))
+	retQEnqCounter := Mux(retQ.io.enq.fire(), retQEnqCounter + 1.U, retQEnqCounter)
+	val retQDeqCounter = dontTouch(RegInit(0.U(64.W)))
+	retQDeqCounter := Mux(retQ.io.deq.fire(), retQDeqCounter + 1.U, retQDeqCounter)
+
 	val wf_arbiter = Module(new InOrderArbiter(UInt(0.W), new ReadyPacket, nCores))
 	val coreSpecificReadyQueues = Vec(Seq.fill(nCores) { Module(new Queue(new ReadyPacket, qDepth)).io })
 
@@ -124,6 +159,27 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	io.picosFinishedInterface.data := delayerAdapter.io.out.bits
 	io.picosFinishedInterface.valid := delayerAdapter.io.out.valid
 	delayerAdapter.io.out.ready := io.picosFinishedInterface.empty
+
+	// Implement submission interactions
+	val submissionHandler = Module(new SubmissionHandler(nCores, UInt(32.W), 48, 200))
+
+	submissionHandler.io.tag <> io.tag
+	submissionHandler.io.subQInterface <> io.subQInterface
+	submissionHandler.io.subRequest <> io.subRequest
+	io.picosSubInterface.data := submissionHandler.io.picosSubMaster.bits
+	io.picosSubInterface.valid := submissionHandler.io.picosSubMaster.valid
+	submissionHandler.io.picosSubMaster.ready := io.picosSubInterface.empty
+
+	val submissionCounter = Wire(UInt(64.W))
+	val retirementCounter = Wire(UInt(64.W))
+	val numInflightTasks  = Wire(UInt(64.W))
+
+	retirementCounter := retQDeqCounter
+	submissionCounter := submissionHandler.io.numStartedSubmissions
+	numInflightTasks := submissionCounter - retirementCounter
+
+	//submissionHandler.io.enabled := numInflightTasks <= 250.U(64.W)
+	submissionHandler.io.enabled := true.B
 
 	// Implement fetching of ready packets
 	// Implement arbitration of the consumption of the single readyQueue
@@ -192,14 +248,4 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	when (wf_counter > 0.U && !picosReadyInterfaceNotEmpty) {
 		exceptionReg := exceptionReg | 1.U 
 	}
-
-	// Implement submission interactions
-	val submissionHandler = Module(new SubmissionHandler(nCores, UInt(32.W), 48))
-
-	submissionHandler.io.tag <> io.tag
-	submissionHandler.io.subQInterface <> io.subQInterface
-	submissionHandler.io.subRequest <> io.subRequest
-	io.picosSubInterface.data := submissionHandler.io.picosSubMaster.bits
-	io.picosSubInterface.valid := submissionHandler.io.picosSubMaster.valid
-	submissionHandler.io.picosSubMaster.ready := io.picosSubInterface.empty
 }
