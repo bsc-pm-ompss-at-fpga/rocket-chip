@@ -18,6 +18,7 @@ lazy val commonSettings = Seq(
   libraryDependencies ++= Seq("org.scala-lang" % "scala-reflect" % scalaVersion.value),
   libraryDependencies ++= Seq("org.json4s" %% "json4s-jackson" % "3.6.1"),
   libraryDependencies ++= Seq("org.scalatest" %% "scalatest" % "3.2.0" % "test"),
+	libraryDependencies += "edu.berkeley.cs" %% "chiseltest" % "0.3.0",
   addCompilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full),
   resolvers ++= Seq(
     Resolver.sonatypeRepo("snapshots"),
