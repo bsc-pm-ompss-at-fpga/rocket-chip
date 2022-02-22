@@ -11,6 +11,8 @@ import chisel3.util._
 import freechips.rocketchip.integrators._
 import freechips.rocketchip.util.{RoutingInfo}
 
+import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
+
 case class RocketCrossingParams(
   crossingType: ClockCrossingType = SynchronousCrossing(),
   master: TilePortParamsLike = TileMasterPortParams(),
@@ -65,9 +67,9 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   printf(s"[RocketSubsystemModuleImp]: The current system has ${outer.nTiles} tiles.\n")
 
   val picosIO = IO(new Bundle {
-	val picosFinishedInterface  = new PicosFifoBundle(UInt(32.W))
-	val picosReadyInterface     = new PicosReadyBundle(UInt(32.W))
-	val picosSubInterface       = new PicosFifoBundle(UInt(32.W))
+	val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
+	val picosReadyInterface     = new PicosReadyBundle(UInt(64.W))
+	val picosSubInterface       = new PicosFifoBundle(UInt(64.W))
 	val pmException             = Output(UInt(4.W))
   })
   
@@ -81,14 +83,17 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   // FIXME: THIS SHOULD REFLECT THE STATE OF ALL DELEGATES
   picosIO.pmException := outer.tile_prci_domains(0).module.delegate.pmException
 
-  outer.tile_prci_domains.zipWithIndex.foreach{case (prci_tile, i) =>
+  outer.tile_prci_domains.zipWithIndex.foreach{ case (prci_tile, i) =>
+    pmanager.io.subQInterface(i) <> prci_tile.module.delegate.subQInterface
+    pmanager.io.subRequest(i) <> prci_tile.module.delegate.subRequest
+    pmanager.io.retInterface(i) <> prci_tile.module.delegate.retInterface
+    pmanager.io.readyRequestInterface(i) <> prci_tile.module.delegate.readyRequestInterface
+    pmanager.io.tag(i) <> prci_tile.module.delegate.tag
+    prci_tile.module.delegate.readyQInterface <> pmanager.io.readyQInterface(i)
 
-	pmanager.io.subQInterface(i) <> prci_tile.module.delegate.subQInterface
-	pmanager.io.subRequest(i) <> prci_tile.module.delegate.subRequest
-	pmanager.io.retInterface(i) <> prci_tile.module.delegate.retInterface
-	pmanager.io.readyRequestInterface(i) <> prci_tile.module.delegate.readyRequestInterface
-	pmanager.io.tag(i) <> prci_tile.module.delegate.tag
-	prci_tile.module.delegate.readyQInterface <> pmanager.io.readyQInterface(i)
+    pmanager.io.argsAndParentInfoVec(i) <> prci_tile.module.delegate.argsAndParentInfo
+    pmanager.io.taskInfoVec(i) <> prci_tile.module.delegate.taskInfo
+    pmanager.io.depInfoVec(i) <> prci_tile.module.delegate.depInfo
   }
   
   outer.delegates.zipWithIndex.foreach{ case (delegate, i) =>

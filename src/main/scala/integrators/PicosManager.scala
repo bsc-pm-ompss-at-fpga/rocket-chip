@@ -8,6 +8,8 @@ import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import chisel3.dontTouch
 
+import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
+
 class ReadyPacket extends Bundle {
 				val nanosID                     = UInt(64.W)
 				val picosID                     = UInt(32.W)
@@ -17,7 +19,7 @@ object ReadyPacket {
 				def apply() = new ReadyPacket
 }
 
-class PicosReadyBundle[T <: Data](typ: T = UInt(32.W)) extends Bundle {
+class PicosReadyBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val data                        = typ.cloneType.asInput
 				val readyEquivalentPop          = Bool().asOutput
 				val validEquivalentIsNotEmpty   = Bool().asInput
@@ -25,7 +27,7 @@ class PicosReadyBundle[T <: Data](typ: T = UInt(32.W)) extends Bundle {
 				override def cloneType = new PicosReadyBundle(typ.cloneType).asInstanceOf[this.type]
 }
 
-class PicosFifoBundle[T <: Data](typ: T = UInt(32.W)) extends Bundle {
+class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val data                        = typ.cloneType.asOutput
 				val valid                       = Bool().asOutput
 				val empty                       = Bool().asInput
@@ -33,13 +35,18 @@ class PicosFifoBundle[T <: Data](typ: T = UInt(32.W)) extends Bundle {
 				override def cloneType = new PicosFifoBundle(typ.cloneType).asInstanceOf[this.type]
 }
 
-class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(32.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
+class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
 				val tag                     = Flipped(Vec(nCores, UInt(64.W).asOutput))
-				val subQInterface           = Flipped(Vec(nCores, Decoupled(UInt(32.W))))
+				val subQInterface           = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 				val subRequest              = Flipped(Vec(nCores, Decoupled(RoutingInfo(64, 48))))
-				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(32.W))))
+				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
+
+				//TODO: Remove the dontTouch to make sure that these signals are being used
+				val argsAndParentInfoVec      = dontTouch( Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo))) )
+				val taskInfoVec            		= dontTouch( Flipped(Vec(nCores, Decoupled(new TaskInfo))) )
+				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
 
 				val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
 				val picosReadyInterface     = new PicosReadyBundle(typ.cloneType)
@@ -129,7 +136,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int 
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
 	val io = IO(new RealManagerIO(nCores))
-	val ret_arbiter = Module(new RRArbiter(UInt(32.W), nCores))
+	val ret_arbiter = Module(new RRArbiter(UInt(64.W), nCores))
 
 	val roccReadyQueue = Module( new Queue(new ReadyPacket, 257 * 3) )
 	dontTouch(roccReadyQueue.io.count)
@@ -138,7 +145,7 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	val roccReadyQueueDeqCounter = dontTouch(RegInit(0.U(64.W)))
 	roccReadyQueueDeqCounter := Mux(roccReadyQueue.io.deq.fire(), roccReadyQueueDeqCounter + 1.U, roccReadyQueueDeqCounter)
 
-	val retQ = Module( new Queue(UInt(32.W), qDepth) )
+	val retQ = Module( new Queue(UInt(64.W), qDepth) )
 	dontTouch(retQ.io.count)
 	val retQEnqCounter = dontTouch(RegInit(0.U(64.W)))
 	retQEnqCounter := Mux(retQ.io.enq.fire(), retQEnqCounter + 1.U, retQEnqCounter)
@@ -152,7 +159,7 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	ret_arbiter.io.in <> io.retInterface
 
 	// Implements writes to the Picos FiFo Retirement Interface
-	val delayerAdapter = Module(new DelayerAdapter(UInt(32.W)))
+	val delayerAdapter = Module(new DelayerAdapter(UInt(64.W)))
 	retQ.io.enq <> ret_arbiter.io.out
 	delayerAdapter.io.in <> retQ.io.deq
 

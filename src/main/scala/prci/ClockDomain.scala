@@ -13,14 +13,22 @@ import freechips.rocketchip.aop._
 import firrtl.transforms.DontTouchAllTargets
 import freechips.rocketchip.util.DontTouch
 
+import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
+
 class DelegateIO extends Bundle {
   val tag                     = Output(UInt(64.W))
   val subQInterface           = Decoupled(UInt(32.W))
   val subRequest              = Decoupled(RoutingInfo(64, 48))
-  val retInterface            = Decoupled(UInt(32.W))
+  val retInterface            = Decoupled(UInt(64.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
   val pmException             = Output(UInt(4.W))
+
+  // A module is the master of its `Decoupled(*)` interface
+  // and the slave of its Flipped(Decoupled(*)) interfaces
+  val argsAndParentInfo         = Decoupled(new ArgsAndParentInfo)
+  val taskInfo                  = Decoupled(new TaskInfo)
+  val depInfo                   = Decoupled(Vec(2, new DepInfo))
 }
 
 class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
@@ -78,6 +86,11 @@ class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
         delegate.retInterface <> tileResetDomainDelegate.retInterface
         delegate.subRequest <> tileResetDomainDelegate.subRequest
         delegate.readyRequestInterface <> tileResetDomainDelegate.readyRequestInterface
+
+        //TODO: TEST IT
+        delegate.argsAndParentInfo <> tileResetDomainDelegate.argsAndParentInfo
+        delegate.taskInfo <> tileResetDomainDelegate.taskInfo
+        delegate.depInfo <> tileResetDomainDelegate.depInfo
     }
 }
 

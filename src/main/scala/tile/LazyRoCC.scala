@@ -19,6 +19,10 @@ import freechips.rocketchip.subsystem.RocketSubsystem
 import freechips.rocketchip.integrators._
 import freechips.rocketchip.prci.DelegateIO
 
+import picos_v4_integration_elements._
+
+import freechips.rocketchip.system.{BaseConfig, RoccExampleConfig}
+
 case object BuildRoCC extends Field[Seq[Parameters => LazyRoCC]](Nil)
 
 class RoCCInstruction extends Bundle {
@@ -32,31 +36,34 @@ class RoCCInstruction extends Bundle {
   val opcode = Bits(7.W)
 }
 
-class RoCCCommand(implicit p: Parameters) extends CoreBundle()(p) {
+class RoCCCommand extends Bundle {
   val inst = new RoCCInstruction
-  val rs1 = Bits(xLen.W)
-  val rs2 = Bits(xLen.W)
+  val rs1 = Bits(64.W)
+  val rs2 = Bits(64.W)
   val status = new MStatus
 }
 
-class RoCCResponse(implicit p: Parameters) extends CoreBundle()(p) {
+class RoCCResponse extends Bundle {
   val rd = Bits(5.W)
-  val data = Bits(xLen.W)
+  val data = Bits(64.W)
 }
 
-class RoCCCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
+trait EssentialRoCCCoreIO extends Bundle {
   val cmd = Flipped(Decoupled(new RoCCCommand))
   val resp = Decoupled(new RoCCResponse)
-  val mem = new HellaCacheIO
   val busy = Output(Bool())
   val interrupt = Output(Bool())
   val exception = Input(Bool())
 }
 
-class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p) {
-  val ptw = Vec(nPTWPorts, new TLBPTWIO)
-  val fpu_req = Decoupled(new FPInput)
-  val fpu_resp = Flipped(Decoupled(new FPResult))
+class RoCCCoreIO(implicit p: Parameters) extends CoreBundle()(p) with EssentialRoCCCoreIO {
+  val mem = new HellaCacheIO
+}
+
+trait PicosRelatedSignals extends Bundle {
+  val argsAndParentInfo         = Decoupled(new ArgsAndParentInfo)
+  val taskInfo                  = Decoupled(new TaskInfo)
+  val depInfo                   = Decoupled(Vec(2, new DepInfo))
 
   //TODO: MAKE IT CLEANER AND BETTER FITTING
   //      TO THE REST OF THE PARAMETRIZABLE
@@ -64,13 +71,19 @@ class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p)
   // FIXME Let routing info get information about the number of cores
   // from elsewhere!
   // FIXME Let tagWidth be set based on the number of cores!
-  val tag                     = Output(UInt(xLen.W))
+  val tag                     = Output(UInt(10.W))
   val subQInterface           = Decoupled(UInt(32.W))
   val subRequest              = Decoupled(RoutingInfo(64, 48))
-  val retInterface            = Decoupled(UInt(32.W))
+  val retInterface            = Decoupled(UInt(64.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
   val pmException             = Output(UInt(4.W))
+}
+
+class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p) with PicosRelatedSignals {
+  val ptw = Vec(nPTWPorts, new TLBPTWIO)
+  val fpu_req = Decoupled(new FPInput)
+  val fpu_resp = Flipped(Decoupled(new FPResult))
 }
 
 class CoreSubmissionUnit extends Bundle {
@@ -137,7 +150,7 @@ val delegate = IO(new DelegateIO)
   val tileId = outer.obviousId
 
   val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
-    val respArb = Module(new RRArbiter(new RoCCResponse()(outer.p), outer.roccs.size))
+    val respArb = Module(new RRArbiter(new RoCCResponse, outer.roccs.size))
     val cmdRouter = Module(new RoccCommandRouter(outer.roccs.map(_.opcodes))(outer.p))
     outer.roccs.zipWithIndex.foreach { case (rocc, i) =>
       rocc.module.io.ptw ++=: ptwPorts
@@ -454,10 +467,40 @@ class BlankConfig extends Config((site, here, up) => {
         case BlankField => false
 })
 
-object SimpleVerilogCompiler  {
+class LazyRoccTestingExtras extends Config((site, here, up) => {
+  //case TileKey => 0
+  case TileKey => new RocketTileParams
+  //case TileVisibilityNodeKey => TLEphemeralNode()(ValName("tile_master"))
+  case TileVisibilityNodeKey => TLTempNode()
+  //case TileVisibilityNodeKey => TLEphemeralNode()(ValName("tile_master"))
+})
+
+object FastCompileCoreRealPicosManager  {
         def main(args: Array[String]): Unit = {
                 implicit val p: Parameters = new BlankConfig
                 var verilog = stage.ChiselStage.emitVerilog(  new freechips.rocketchip.integrators.CoreRealPicosManager(2, 16)(p)  )
+                val pw = new PrintWriter(new File("/tmp/source.v" ))
+                pw.write(verilog)
+                pw.close
+        }
+}
+
+class FastCompilationConfig extends Config (
+  new RoccExampleConfig ++
+  new LazyRoccTestingExtras
+)
+
+//FIXME: The following code still fails to provide
+//       enough configuration context for compiling
+//       'bogus' in isolation from the rest of the
+//       system
+object FastCompileBogusModule  {
+        def main(args: Array[String]): Unit = {
+                //implicit val p: Parameters = new BlankConfig
+                implicit val p: Parameters = new FastCompilationConfig
+                implicit val valName = ValName("derp")
+                var bogusInstance = LazyModule(new bogus(OpcodeSet.custom2)(p))
+                var verilog = stage.ChiselStage.emitVerilog(  bogusInstance.module  )
                 val pw = new PrintWriter(new File("/tmp/source.v" ))
                 pw.write(verilog)
                 pw.close
@@ -473,268 +516,40 @@ class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes
 
 class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int = 24)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
   with HasCoreParameters {
-
-    // This register captures the index of the target
-    // result register
-    // TODO: CHECK: MODIFIED FROM REG TO REGINIT IN 2021
+    /*
     val req_rd = RegInit(io.resp.bits.rd)
 
-    val s_idle :: s_work_request :: s_nanosid_fetch_work :: s_picosid_fetch_work :: s_submitting :: s_retiring :: s_sub_request :: s_submitting_three :: Nil = Enum(8)
-    //val state = Reg(init = s_idle)
-    val state = RegInit(s_idle)
-    val busyWithSubmitThree = RegInit(false.B)
-    
-    val subRequestCount = RegInit(0.U(64.W))
-    val retirementCount = RegInit(0.U(64.W))
+    // For detecting the operation to perform
+    val funct         = io.cmd.bits.inst.funct
+
+    val PicosV4Parser = Module(new InstructionParser)
+
+    // Return register data
+		io.resp.bits.rd := PicosV4Parser.io.resp_rd_id
+		io.resp.bits.data := PicosV4Parser.io.resp_bits
+    io.resp.valid := PicosV4Parser.io.resp_valid
+    PicosV4Parser.io.resp_ready := io.resp.ready
+
+    // Instruction input
+    io.cmd.ready := PicosV4Parser.io.cmd_ready
+    PicosV4Parser.io.cmd_valid := io.cmd.valid
+    PicosV4Parser.io.rd_id := io.cmd.bits.inst.rd
+    PicosV4Parser.io.rs1_bits := io.cmd.bits.rs1
+    PicosV4Parser.io.rs2_bits := io.cmd.bits.rs2
+
+    PicosV4Parser.io.funct := funct
+
+    io.busy := PicosV4Parser.io.busy                  
+
+    io.argsAndParentInfo <> PicosV4Parser.io.argsAndParentInfo       
+    io.taskInfo <> PicosV4Parser.io.taskInfo                 
+    io.depInfo <> PicosV4Parser.io.depInfo                   
 
     // Do not generate interrupts
     io.interrupt := false.B
-
-    // For detecting the operation to perform
-      val funct         = io.cmd.bits.inst.funct
-      val doSubmit      = funct === 1.U
-      val doNFetchWork  = funct === 2.U
-      val doRetire      = funct === 3.U
-      val doPFetchWork  = funct === 4.U
-      val doSubRequest  = funct === 5.U
-      val doWorkRequest = funct === 6.U
-      val doSubmitThree = funct === 7.U
-
-      /*
-       * These debug counters track how many types
-       * various events have happened
-       */
-      /*
-      val debug_subSuccessCount = RegInit(0.U(32.W))
-      val debug_subFailureCount = RegInit(0.U(32.W))
-      val debug_nanosFetchRequestSuccessCount = RegInit(0.U(32.W))
-      val debug_nanosFetchRequestFailureCount = RegInit(0.U(32.W))
-      val debug_retirementSuccessCount = RegInit(0.U(32.W))
-      val debug_retirementFailureCount = RegInit(0.U(32.W))
-      val debug_picosFetchRequestSuccessCount = RegInit(0.U(32.W))
-      val debug_picosFetchRequestFailureCount = RegInit(0.U(32.W))
-      val debug_subRequestSuccessCount = RegInit(0.U(32.W))
-      val debug_subRequestFailureCount = RegInit(0.U(32.W))
-      val debug_workRequestSuccessCount = RegInit(0.U(32.W))
-      val debug_workRequestFailureCount = RegInit(0.U(32.W))
-      val debug_submitThreeSuccessCount = RegInit(0.U(32.W))
-      val debug_submitThreeFailureCount = RegInit(0.U(32.W))
-      */
-
-    // Let the registers reset to 0
-    //val x = Reg(UInt(width = xLen), init = UInt(0))
-    //val x = RegInit(UInt(value = 0, width = xLen))
-    val x = RegInit(0.asUInt(xLen.W))
-    //val tag = Reg(UInt(width = xLen), init = UInt(0))
-    //val tag = RegInit(UInt(value = 0, width = xLen))
-    val tag = RegInit(0.asUInt(xLen.W))
-
-    // The module is always ready to receive data
-    io.cmd.ready  := (state === s_idle)
-    
-    // Tautology that says that we are 
-    // busy whenever we are not idle
-    io.busy       := (state =/= s_idle)
-
-    // Get input when the command is fired
-    when (io.cmd.fire()) {
-      req_rd            := io.cmd.bits.inst.rd
-      x                 := io.cmd.bits.rs1
-      tag               := io.cmd.bits.rs2
-
-      when (doSubmit) {
-        state := s_submitting
-      } .elsewhen (doNFetchWork) {
-        state := s_nanosid_fetch_work
-      } .elsewhen (doRetire) {
-        state := s_retiring
-      } .elsewhen (doPFetchWork) {
-        state := s_picosid_fetch_work
-      } .elsewhen (doSubRequest) {
-        state := s_sub_request
-      } .elsewhen (doWorkRequest) {
-        state := s_work_request
-      } .elsewhen (doSubmitThree) {
-        state := s_submitting_three
-      }
-    }
-
-    // Implements submission requests
-      val sub_req_valid              = (state === s_sub_request)
-      val submissionError            = Fill(64, 1.U)
-
-      io.tag                        := tag
-      io.subRequest.bits.numPackets := x
-      io.subRequest.bits.arbID      := tag
-      //FIXME: The following should not work because both subRequestCount and retirementCount only take core-specific
-      //       events into account.
-      //io.subRequest.valid           := (state === s_sub_request) && (subRequestCount < retirementCount + 256.U(64.W))
-      io.subRequest.valid           := (state === s_sub_request)
-
-      val inflightCountUpperBound = dontTouch(Wire(UInt(64.W)))
-      inflightCountUpperBound := subRequestCount - retirementCount
-
-      val sub_request_success        = io.subRequest.fire()
-      when (io.subRequest.fire()) {
-        subRequestCount := subRequestCount +  1.U(64.W)
-      }
-
-      when (state === s_sub_request) {
-        state := s_idle
-        io.resp.bits.data                   := Mux(sub_request_success, 0.U, submissionError)
-      }
-
-    // Implements submission to SubQ
-      val fasterSubmitQueue                  = Module (new Queue(new SubmissionUnit, 16))
-      val sub_valid                          = (state === s_submitting)
-      val submit_success                     = io.subQInterface.fire() && !busyWithSubmitThree
-
-      io.subQInterface.valid := ((state === s_submitting) && !busyWithSubmitThree) || (busyWithSubmitThree && fasterSubmitQueue.io.deq.valid)
-
-      when (state === s_submitting) {
-        state                               := s_idle
-        io.resp.bits.data                   := Mux(submit_success, 0.U, submissionError)
-
-        when (!busyWithSubmitThree) {
-          io.tag                            := tag
-          io.subQInterface.bits             := x
-        }
-      }
-
-
-    // Implements faster submission to SubQ
-      val packetsToSend                      = RegInit(t = UInt(2.W), init = 3.asUInt(2.W))
-      val submit3_success                    = fasterSubmitQueue.io.enq.fire()
-      val sub3_valid                         = (state === s_submitting_three)
-    
-      fasterSubmitQueue.io.enq.bits.packet0 := x(63, 32)
-      fasterSubmitQueue.io.enq.bits.packet1 := x(31, 0)
-      fasterSubmitQueue.io.enq.bits.packet2 := tag(31, 0)
-      fasterSubmitQueue.io.enq.valid        := (state === s_submitting_three)
-
-      when (state === s_submitting_three) {
-        state                               := s_idle
-        io.resp.bits.data                   := Mux(submit3_success, 0.U, submissionError)
-
-        when (submit3_success) {
-          busyWithSubmitThree               := true.B
-        }
-      }
-      
-      fasterSubmitQueue.io.deq.ready := false.B
-
-      when (busyWithSubmitThree) {
-        when (fasterSubmitQueue.io.deq.valid) {
-          when (packetsToSend === 3.U) {
-
-            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet0
-            fasterSubmitQueue.io.deq.ready := false.B
-
-            when (io.subQInterface.fire()) {
-              packetsToSend := 2.U
-            }
-
-          } .elsewhen (packetsToSend === 2.U) {
-
-            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet1
-            fasterSubmitQueue.io.deq.ready := false.B
-
-            when (io.subQInterface.fire()) {
-              packetsToSend := 1.U
-            }
-
-          } .elsewhen (packetsToSend === 1.U) {
-
-            io.subQInterface.bits := fasterSubmitQueue.io.deq.bits.packet2
-            fasterSubmitQueue.io.deq.ready := false.B
-
-            when (io.subQInterface.fire()) {
-              packetsToSend := 3.U
-              fasterSubmitQueue.io.deq.ready := true.B
-            }
-          }
-        } .otherwise {
-          busyWithSubmitThree := false.B
-          fasterSubmitQueue.io.deq.ready := false.B
-        }
-      }
-      
-
-    // Implements work-fetching
-    val pendingRequestsCounter  = RegInit(0.U(xLen.W))
-    val userReadNanosID         = RegInit(false.B)
-    val workFetchingError       = Fill(64, 1.U)
-    val thereIsReadyPacket      = io.readyQInterface.valid
-    val increasedCounterVal     = pendingRequestsCounter + 1.U
-    val decreasedCounterVal     = pendingRequestsCounter - 1.U
-
-    io.readyQInterface.ready  := (state === s_picosid_fetch_work && pwfi_success)
-
-      // Implements work request
-        io.tag := tag
-
-        val wr_valid                    = (state === s_work_request)
-        val wr_success                  = io.readyRequestInterface.fire()
-
-        io.readyRequestInterface.valid  := (state === s_work_request)
-
-        when (state === s_work_request) {
-          io.resp.bits.data          := Mux(wr_success, increasedCounterVal, pendingRequestsCounter)
-          pendingRequestsCounter     := Mux(wr_success, increasedCounterVal, pendingRequestsCounter)
-          state                      := s_idle
-        }
-
-      // Implements NanosID work-fetching
-        io.tag := tag
-
-        lazy val nanosID             =   io.readyQInterface.bits.nanosID
-        lazy val nwfi_valid          =   (state === s_nanosid_fetch_work)
-        lazy val nwfi_success        =   thereIsReadyPacket && !userReadNanosID
-
-        when (state === s_nanosid_fetch_work) {
-          when (nwfi_success)        { userReadNanosID := true.B }
-
-          io.resp.bits.data          := Mux(nwfi_success, nanosID, workFetchingError)
-          state                      := s_idle
-        }
-
-      // Implements PicosID work-fetching
-        io.tag := tag
-
-        lazy val picosID             =   io.readyQInterface.bits.picosID
-        lazy val pwfi_valid          =   (state === s_picosid_fetch_work)
-        lazy val pwfi_success        =   thereIsReadyPacket && userReadNanosID
-
-        when (state === s_picosid_fetch_work) {
-          when (pwfi_success) {
-            pendingRequestsCounter  := decreasedCounterVal
-            userReadNanosID         := false.B    
-          }
-
-          io.resp.bits.data         := Mux(pwfi_success, picosID, workFetchingError)
-          state                     := s_idle
-        }
-
-    // Implements retirement
-      io.retInterface.bits  := x
-      io.retInterface.valid := (state === s_retiring)
-      when (io.retInterface.fire()) {
-        state := s_idle
-        retirementCount := retirementCount + 1.U(64.W)
-      }
-
-    // Write data to the reply register if
-    // any rd-writing instruction has been
-    // issued
-    io.resp.valid           := wr_valid || nwfi_valid || pwfi_valid || sub3_valid || sub_valid || sub_req_valid
-
-    // The register to write to should
-    // always be the one chosen by the
-    // user
-    io.resp.bits.rd     := req_rd
-
     // We never issue memory requests
     io.mem.req.valid  := false.B
+    */
 }
 
 class RoccCommandRouter(opcodes: Seq[OpcodeSet])(implicit p: Parameters)

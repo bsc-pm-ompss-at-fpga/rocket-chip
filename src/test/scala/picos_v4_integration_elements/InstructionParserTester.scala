@@ -22,7 +22,7 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "InstructionParser"
   it should "produce no resp output before the first instruction has been parsed" in {
     test(new InstructionParser) { c =>
-      c.io.resp_valid.expect(false.B)
+      c.io.resp.valid.expect(false.B)
     }
   }
   
@@ -32,29 +32,31 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
       var a = 0;
       for(a <- 0 until 128){
         if (a < 8 || a > 13) {
-            c.io.cmd_valid.poke(true.B)
-            c.io.funct.poke(a.U)
+            c.io.cmd.valid.poke(true.B)
+            c.io.cmd.bits.inst.funct.poke(a.U)
             c.clock.step()
-            c.io.resp_valid.expect(false.B)
+            c.io.resp.valid.expect(false.B)
             c.clock.step()
         }
       }
     }
   }
 
-  it should "produce a resp output in the first cycle after a known funct value is passed to it" in {
+  it should "write some value to the rd indicated by the instruction in the first cycle after a known funct value is passed to it" in {
     //test(new InstructionParser).withAnnotations(Seq(VerilatorBackendAnnotation)) { c =>
     test(new InstructionParser) { c =>
       var a = 0;
+      var b = 0;
       for(a <- 8 until 14){
-        //println("Funct value being tested " + a)
-        //println("Last output value :" + c.io.out.peek().litValue)
-        c.io.cmd_valid.poke(true.B)
-        c.io.funct.poke(a.U)
-        c.clock.step()
-        c.io.resp_valid.expect(true.B)
-        c.clock.step()
+        for (b <- 0 until 33)
+          c.io.cmd.valid.poke(true.B)
+          c.io.cmd.bits.inst.funct.poke(a.U)
+          c.io.cmd.bits.inst.rd.poke(b.U)
+          c.clock.step()
+          c.io.resp.valid.expect(true.B)
+          c.io.resp.bits.rd.expect(b.U)
+          c.clock.step()
+        }
       }
     }
-  }
 }
