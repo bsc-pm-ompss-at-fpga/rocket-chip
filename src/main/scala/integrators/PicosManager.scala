@@ -11,8 +11,8 @@ import chisel3.dontTouch
 import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
 
 class ReadyPacket extends Bundle {
-				val nanosID                     = UInt(64.W)
-				val picosID                     = UInt(32.W)
+				val nanosID                     = UInt(32.W)
+				val picosID                     = UInt(64.W)
 }
 
 object ReadyPacket {
