@@ -41,18 +41,20 @@ class InstructionParser extends Module {
    *  -- Ensure that work-fetching and retirement routing can occur even if this module
    *     only writes zeros to io.tag
    */
-  io.subQInterface.bits := 0.U
-  io.subQInterface.valid := 0.U
   io.pmException := 0.U
   io.readyRequestInterface.bits := 0.U
   io.retInterface.bits := 0.U
   io.readyQInterface.ready := 0.U
   io.readyRequestInterface.valid := 0.U
-  io.subRequest.valid := 0.U
-  io.subRequest.bits.numPackets := 0.U
+
+  // TODO: Clear these deprecated signals
+  //io.subRequest.valid := 0.U
+  //io.subRequest.bits.numPackets := 0.U
+  //io.subRequest.bits.arbID := 0.U
+  //io.subQInterface.bits := 0.U
+  //io.subQInterface.valid := 0.U
+  
   io.interrupt := 0.U
-  io.subRequest.bits.arbID := 0.U
-  // TODO: 
   io.tag := 0.U
   io.retInterface.valid := 0.U
 

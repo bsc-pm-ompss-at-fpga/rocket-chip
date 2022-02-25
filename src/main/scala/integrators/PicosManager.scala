@@ -19,26 +19,25 @@ object ReadyPacket {
 				def apply() = new ReadyPacket
 }
 
-class PicosReadyBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
-				val data                        = typ.cloneType.asInput
-				val readyEquivalentPop          = Bool().asOutput
-				val validEquivalentIsNotEmpty   = Bool().asInput
-
-				override def cloneType = new PicosReadyBundle(typ.cloneType).asInstanceOf[this.type]
+trait HasDest extends Bundle{
+				val dest                     		= UInt(3.W)
 }
 
 class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val data                        = typ.cloneType.asOutput
 				val valid                       = Bool().asOutput
 				val empty                       = Bool().asInput
+				val last												= Bool().asOutput
 
 				override def cloneType = new PicosFifoBundle(typ.cloneType).asInstanceOf[this.type]
 }
 
 class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
-				val tag                     = Flipped(Vec(nCores, UInt(64.W).asOutput))
-				val subQInterface           = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
-				val subRequest              = Flipped(Vec(nCores, Decoupled(RoutingInfo(64, 48))))
+        // TODO: Clear these deprecated signals
+				// val tag                     = Flipped(Vec(nCores, UInt(64.W).asOutput))
+				// val subQInterface           = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
+				// val subRequest              = Flipped(Vec(nCores, Decoupled(RoutingInfo(64, 48))))
+
 				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
@@ -49,8 +48,10 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
 
 				val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
-				val picosReadyInterface     = new PicosReadyBundle(typ.cloneType)
-				val picosSubInterface       = new PicosFifoBundle(typ.cloneType)
+				val picosReadyInterface     = Flipped(new PicosFifoBundle(typ.cloneType))
+				// TODO: Remove the dontTouch
+				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType) with HasDest)
+				val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
 
 				val pmException               = UInt(4.W).asOutput
 }
@@ -168,6 +169,9 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	delayerAdapter.io.out.ready := io.picosFinishedInterface.empty
 
 	// Implement submission interactions
+	// FIXME: Re-activate the following code with adaptations to
+	//        let it interact with the new interface
+	/*
 	val submissionHandler = Module(new SubmissionHandler(nCores, UInt(32.W), 48, 200))
 
 	submissionHandler.io.tag <> io.tag
@@ -187,6 +191,7 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 
 	//submissionHandler.io.enabled := numInflightTasks <= 250.U(64.W)
 	submissionHandler.io.enabled := true.B
+	*/
 
 	// Implement fetching of ready packets
 	// Implement arbitration of the consumption of the single readyQueue
@@ -209,9 +214,15 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	val wf_counter = Reg(t = UInt(3.W), init = 0.U)
 	val exceptionReg = Reg(t = UInt(4.W), init = 0.U)
 
+	/*
 	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.validEquivalentIsNotEmpty
 	val picosReadyInterfacePop = io.picosReadyInterface.readyEquivalentPop
 	val picosReadyInterfaceBits = io.picosReadyInterface.data
+	*/
+	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.valid
+	val picosReadyInterfacePop = io.picosReadyInterface.empty
+	val picosReadyInterfaceBits = io.picosReadyInterface.data
+
 	val readyPacket = Wire(new ReadyPacket)
 
 	val wf_taskID_high = RegEnable(picosReadyInterfaceBits, wf_counter === 1.U)

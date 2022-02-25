@@ -16,9 +16,11 @@ import freechips.rocketchip.util.DontTouch
 import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
 
 class DelegateIO extends Bundle {
-  val tag                     = Output(UInt(64.W))
-  val subQInterface           = Decoupled(UInt(32.W))
-  val subRequest              = Decoupled(RoutingInfo(64, 48))
+  // TODO: Clear these deprecated signals
+  // val subQInterface           = Decoupled(UInt(32.W))
+  // val subRequest              = Decoupled(RoutingInfo(64, 48))
+  // val tag                     = Output(UInt(64.W))
+  //
   val retInterface            = Decoupled(UInt(64.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
@@ -55,12 +57,14 @@ class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
 
         val rocketTileDelegate = tileResetDomainChildren.last.asInstanceOf[RocketTile].module.delegate
 
-        delegate.tag := rocketTileDelegate.tag
+        // TODO: Clear these deprecated signals
+        // delegate.tag := rocketTileDelegate.tag
+        // delegate.subQInterface <> rocketTileDelegate.subQInterface
+        // delegate.subRequest <> rocketTileDelegate.subRequest
+        
         delegate.pmException := rocketTileDelegate.pmException
         rocketTileDelegate.readyQInterface <> delegate.readyQInterface
-        delegate.subQInterface <> rocketTileDelegate.subQInterface
         delegate.retInterface <> rocketTileDelegate.retInterface
-        delegate.subRequest <> rocketTileDelegate.subRequest
         delegate.readyRequestInterface <> rocketTileDelegate.readyRequestInterface
 
     } else if (wrapper.className == "TilePRCIDomain") {
@@ -79,12 +83,14 @@ class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
         val numIO = aop.Select.ios(wrapper.tile.module).length
         val rocketTileDelegate = rocketTileIOs(numIO - 1)
 
-        delegate.tag := tileResetDomainDelegate.tag
+        // TODO: Clear these deprecated signals
+        // delegate.tag := tileResetDomainDelegate.tag
+        // delegate.subQInterface <> tileResetDomainDelegate.subQInterface
+        // delegate.subRequest <> tileResetDomainDelegate.subRequest
+        
         delegate.pmException := tileResetDomainDelegate.pmException
         tileResetDomainDelegate.readyQInterface <> delegate.readyQInterface
-        delegate.subQInterface <> tileResetDomainDelegate.subQInterface
         delegate.retInterface <> tileResetDomainDelegate.retInterface
-        delegate.subRequest <> tileResetDomainDelegate.subRequest
         delegate.readyRequestInterface <> tileResetDomainDelegate.readyRequestInterface
 
         //TODO: TEST IT

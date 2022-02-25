@@ -72,8 +72,11 @@ trait PicosRelatedSignals extends Bundle {
   // from elsewhere!
   // FIXME Let tagWidth be set based on the number of cores!
   val tag                     = Output(UInt(10.W))
-  val subQInterface           = Decoupled(UInt(32.W))
-  val subRequest              = Decoupled(RoutingInfo(64, 48))
+
+  /*
+      val subQInterface           = Decoupled(UInt(32.W))
+      val subRequest              = Decoupled(RoutingInfo(64, 48))
+   */
   val retInterface            = Decoupled(UInt(64.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
@@ -139,11 +142,13 @@ val delegate = IO(new DelegateIO)
   println(s"We found ${accsTalkingToPicos.length} RoCC accelerators talking to Picos Manager in this Tile")
   val picosMate = accsTalkingToPicos(0)
 
-  delegate.subQInterface <> picosMate.module.io.subQInterface
-  delegate.subRequest <> picosMate.module.io.subRequest
+  // Deprecated signals
+  //delegate.subQInterface <> picosMate.module.io.subQInterface
+  //delegate.subRequest <> picosMate.module.io.subRequest
+  //delegate.tag := picosMate.module.io.tag
+  
   delegate.retInterface <> picosMate.module.io.retInterface
   delegate.readyRequestInterface <> picosMate.module.io.readyRequestInterface
-  delegate.tag := picosMate.module.io.tag
   picosMate.module.io.readyQInterface <> delegate.readyQInterface
   delegate.pmException := picosMate.module.io.pmException
   
@@ -516,40 +521,44 @@ class bogus(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes
 
 class bogusModule[T <: Data](val outer: bogus, typ: T = UInt(32.W), qDepth: Int = 24)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
   with HasCoreParameters {
-    /*
-    val req_rd = RegInit(io.resp.bits.rd)
-
-    // For detecting the operation to perform
-    val funct         = io.cmd.bits.inst.funct
-
     val PicosV4Parser = Module(new InstructionParser)
 
-    // Return register data
-		io.resp.bits.rd := PicosV4Parser.io.resp_rd_id
-		io.resp.bits.data := PicosV4Parser.io.resp_bits
-    io.resp.valid := PicosV4Parser.io.resp_valid
-    PicosV4Parser.io.resp_ready := io.resp.ready
-
-    // Instruction input
-    io.cmd.ready := PicosV4Parser.io.cmd_ready
-    PicosV4Parser.io.cmd_valid := io.cmd.valid
-    PicosV4Parser.io.rd_id := io.cmd.bits.inst.rd
-    PicosV4Parser.io.rs1_bits := io.cmd.bits.rs1
-    PicosV4Parser.io.rs2_bits := io.cmd.bits.rs2
-
-    PicosV4Parser.io.funct := funct
-
     io.busy := PicosV4Parser.io.busy                  
+    io.interrupt := PicosV4Parser.io.interrupt
+    io.resp <> PicosV4Parser.io.resp
+    PicosV4Parser.io.cmd <> io.cmd
 
-    io.argsAndParentInfo <> PicosV4Parser.io.argsAndParentInfo       
-    io.taskInfo <> PicosV4Parser.io.taskInfo                 
-    io.depInfo <> PicosV4Parser.io.depInfo                   
+    // [to-refactor]: This could be simplified by bundling all Picos-related signals
+    //                within a single bundle
+    PicosV4Parser.io.readyQInterface <> io.readyQInterface
 
-    // Do not generate interrupts
-    io.interrupt := false.B
+    // TODO: Clear these deprecated signals
+    //io.subRequest <> PicosV4Parser.io.subRequest
+    //io.subQInterface <> PicosV4Parser.io.subQInterface
+    
+    io.taskInfo <> PicosV4Parser.io.taskInfo
+    io.argsAndParentInfo <> PicosV4Parser.io.argsAndParentInfo
+    io.readyRequestInterface <> PicosV4Parser.io.readyRequestInterface
+    io.retInterface <> PicosV4Parser.io.retInterface
+    io.depInfo <> PicosV4Parser.io.depInfo
+    PicosV4Parser.io.exception := io.exception
+
+    /*
+    PicosV4Parser.io.readyQInterface.bits.nanosID <= VOID
+    PicosV4Parser.io.readyQInterface.valid <= VOID
+    PicosV4Parser.io.readyQInterface.bits.picosID <= VOID
+    PicosV4Parser.io.subRequest.ready <= VOID
+    PicosV4Parser.io.taskInfo.ready <= VOID
+    PicosV4Parser.io.argsAndParentInfo.ready <= VOID
+    PicosV4Parser.io.readyRequestInterface.ready <= VOID
+    PicosV4Parser.io.retInterface.ready <= VOID
+    PicosV4Parser.io.depInfo.ready <= VOID
+    PicosV4Parser.io.subQInterface.ready <= VOID
+    PicosV4Parser.io.exception <= VOID
+    */
+
     // We never issue memory requests
     io.mem.req.valid  := false.B
-    */
 }
 
 class RoccCommandRouter(opcodes: Seq[OpcodeSet])(implicit p: Parameters)

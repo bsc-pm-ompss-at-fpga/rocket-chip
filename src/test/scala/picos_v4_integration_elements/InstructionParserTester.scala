@@ -60,7 +60,6 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
 	val r = new scala.util.Random()
 	r.setSeed(1000)
   
-	/*
 	behavior of "InstructionParser"
   it should "produce no resp output if an unknown funct value is passed to it" in {
     //test(new InstructionParser).withAnnotations(Seq(VerilatorBackendAnnotation)) { c =>
@@ -244,7 +243,6 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
 			c.clock.step()
     }
   }
-	*/
 
 	behavior of "Instruction work_request"
   it should "return an increasing value every time a work-fetch request could be issued, and the same value as before when it couldn't" in {

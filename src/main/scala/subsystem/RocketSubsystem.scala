@@ -67,10 +67,11 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   printf(s"[RocketSubsystemModuleImp]: The current system has ${outer.nTiles} tiles.\n")
 
   val picosIO = IO(new Bundle {
-	val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
-	val picosReadyInterface     = new PicosReadyBundle(UInt(64.W))
-	val picosSubInterface       = new PicosFifoBundle(UInt(64.W))
-	val pmException             = Output(UInt(4.W))
+    val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
+    val picosReadyInterface     = Flipped(new PicosFifoBundle(UInt(64.W)))
+    val picosSubInterface       = new PicosFifoBundle(UInt(64.W)) with HasDest
+    val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
+    val pmException             = Output(UInt(4.W))
   })
   
   var nCores = outer.delegates.length
@@ -78,17 +79,21 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   lazy val pmanager = Module(new CoreRealPicosManager(outer.nTiles))
 
   picosIO.picosSubInterface <> pmanager.io.picosSubInterface
-  picosIO.picosReadyInterface <> pmanager.io.picosReadyInterface
   picosIO.picosFinishedInterface <> pmanager.io.picosFinishedInterface
+  pmanager.io.picosReadyInterface <> picosIO.picosReadyInterface
+  pmanager.io.picosAckInterface <> picosIO.picosAckInterface
+
   // FIXME: THIS SHOULD REFLECT THE STATE OF ALL DELEGATES
   picosIO.pmException := outer.tile_prci_domains(0).module.delegate.pmException
 
   outer.tile_prci_domains.zipWithIndex.foreach{ case (prci_tile, i) =>
-    pmanager.io.subQInterface(i) <> prci_tile.module.delegate.subQInterface
-    pmanager.io.subRequest(i) <> prci_tile.module.delegate.subRequest
+    // TODO: Clear these deprecated signals
+    // pmanager.io.subQInterface(i) <> prci_tile.module.delegate.subQInterface
+    // pmanager.io.subRequest(i) <> prci_tile.module.delegate.subRequest
+    // pmanager.io.tag(i) <> prci_tile.module.delegate.tag
+    
     pmanager.io.retInterface(i) <> prci_tile.module.delegate.retInterface
     pmanager.io.readyRequestInterface(i) <> prci_tile.module.delegate.readyRequestInterface
-    pmanager.io.tag(i) <> prci_tile.module.delegate.tag
     prci_tile.module.delegate.readyQInterface <> pmanager.io.readyQInterface(i)
 
     pmanager.io.argsAndParentInfoVec(i) <> prci_tile.module.delegate.argsAndParentInfo
