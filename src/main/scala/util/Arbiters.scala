@@ -423,3 +423,89 @@ class ZeroPadder[T <: Data](typ: T, burstSizeWithZeros: Int) extends Module {
     }
   }
 }
+
+class ArbitrarySuffixer[T <: Data](typ: T, burstSizeWithSuffix: Int, suffixValue: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Decoupled(typ.cloneType).flip
+    val out = Decoupled(typ.cloneType)
+  })
+
+  val counter = RegInit(UInt(burstSizeWithSuffix - 1))
+  val suffixNow = counter === 0.U
+
+  when (suffixNow) {
+    io.in.ready := false.B
+    io.out.valid := true.B
+    io.out.bits := suffixValue.U
+  } .otherwise {
+    io.out <> io.in
+  }
+
+  when (io.out.fire()) {
+    when (counter > 0.U) {
+      counter := counter - 1.U
+    } .otherwise {
+      counter := UInt(burstSizeWithSuffix - 1)
+    }
+  }
+}
+
+class ArbitraryPrefixer[T <: Data](typ: T, burstSizeWithPrefix: Int, prefixValue: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Decoupled(typ.cloneType).flip
+    val out = Decoupled(typ.cloneType)
+    val enablePrefixing = Input(Wire(Bool()))
+  })
+
+  val counter = RegInit(0.U(log2Ceil(burstSizeWithPrefix).W))
+
+  val prefixNow = counter === 0.U
+  val wrapCounter = counter === (burstSizeWithPrefix - 1).U
+
+  when (prefixNow) {
+    io.in.ready := false.B
+    io.out.valid := io.enablePrefixing
+    io.out.bits := prefixValue.U
+  } .otherwise {
+    io.out <> io.in
+  }
+
+  when (io.out.fire()) {
+    when (wrapCounter) {
+      counter := 0.U
+    } .otherwise {
+      counter := counter + 1.U
+    }
+  }
+}
+
+class ArbitraryPrefixerAndSuffixer[T <: Data](typ: T, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Decoupled(typ.cloneType).flip
+    val out = Decoupled(typ.cloneType)
+    val enablePrefixing = Input(Wire(Bool()))
+  })
+
+  val prefixer = Module(new ArbitraryPrefixer(typ, burstSizeWithPrefixAndSuffix - 1, prefixValue))
+  val suffixer = Module(new ArbitrarySuffixer(typ, burstSizeWithPrefixAndSuffix, suffixValue))
+
+  prefixer.io.enablePrefixing := io.enablePrefixing
+  prefixer.io.in <> io.in
+  suffixer.io.in <> prefixer.io.out
+  io.out <> suffixer.io.out
+}
+
+class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Vec(numProducers, Decoupled(typ.cloneType)).flip
+    val out = Decoupled(typ.cloneType)
+  })
+
+  val arbitraryPrefixerAndSuffixer = Module(new ArbitraryPrefixerAndSuffixer(typ, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
+  val roundRobinArbiter = Module(new RRArbiter(typ, numProducers))
+
+  roundRobinArbiter.io.in <> io.in
+  arbitraryPrefixerAndSuffixer.io.in <> roundRobinArbiter.io.out
+  arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid
+  io.out <> arbitraryPrefixerAndSuffixer.io.out
+}
