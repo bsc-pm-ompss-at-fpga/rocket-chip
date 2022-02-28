@@ -24,41 +24,6 @@ import scala.util.Random._
   * https://github.com/ucb-bar/chiseltest
   */
 class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
-	val flag_success_hw									= 0.U
-	val flag_failure_hw									= "h_ffff_ffff_ffff_ffff".U
-
-  val funct_initiate_task             = 8 
-  val funct_add_args_and_parent_info  = 9 
-  val funct_send_in_dep               = 10
-  val funct_send_in_deps              = 11
-  val funct_send_out_dep              = 12
-  val funct_send_out_deps             = 13
-
-  val funct_fetch_nanos_id					  = 2
-  val funct_retire									  = 3
-  val funct_fetch_picos_id					  = 4
-  val funct_work_request						  = 6
-
-  val valid_funct_values = Array(
-		funct_initiate_task,
-		funct_add_args_and_parent_info,
-		funct_send_in_dep,
-		funct_send_in_deps,
-		funct_send_out_dep,
-		funct_send_out_deps,
-		funct_fetch_nanos_id,
-		funct_retire,
-		funct_fetch_picos_id,
-		funct_work_request
-	).to[SortedSet]
-
-  val funct_values_of_blocking_instructions = Array(
-		funct_retire
-	).to[SortedSet]
-
-  val opcode_range = range(0, 128).to[SortedSet]
-  val register_set = range(0, 32).to[SortedSet]
-
   val numTestedCores = 8
 
 	val r = new scala.util.Random()
