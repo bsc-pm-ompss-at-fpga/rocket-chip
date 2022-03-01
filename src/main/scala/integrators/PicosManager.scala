@@ -9,10 +9,11 @@ import freechips.rocketchip.diplomacy._
 import chisel3.dontTouch
 
 import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
+import freechips.rocketchip.tile.{BlankConfig}
 
 class ReadyPacket extends Bundle {
 				val nanosID                     = UInt(32.W)
-				val picosID                     = UInt(64.W)
+				val picosID                     = UInt(32.W)
 }
 
 object ReadyPacket {
@@ -30,6 +31,12 @@ class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val last												= Bool().asOutput
 
 				override def cloneType = new PicosFifoBundle(typ.cloneType).asInstanceOf[this.type]
+}
+
+class ReadyTaskIO(nCores: Int) extends Bundle {
+				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
+				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
+				val picosReadyInterface     = Flipped(new PicosFifoBundle(UInt(64.W)))
 }
 
 class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
@@ -135,16 +142,75 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int 
 				io.picosSubMaster <> delayerAdapter.io.out
 }
 
-class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
-	val io = IO(new RealManagerIO(nCores))
-	val ret_arbiter = Module(new RRArbiter(UInt(64.W), nCores))
+trait HasRPEDebugSignals extends Bundle {
+				val readyPacketWireMonitor   		= Output(new ReadyPacket)
+				val roccReadyQueueMonitor    		= Decoupled(new ReadyPacket)
+}
 
-	val roccReadyQueue = Module( new Queue(new ReadyPacket, 257 * 3) )
+class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
+	//val io = IO(new ReadyTaskIO(nCores) with HasRPEDebugSignals)
+	val io = IO(new ReadyTaskIO(nCores) with HasRPEDebugSignals)
+
+	implicit val p: Parameters = new BlankConfig
+
+	val wf_arbiter = Module(new InOrderArbiter(UInt(0.W), new ReadyPacket, nCores))
+	wf_arbiter.io.in_req <> io.readyRequestInterface
+
+	val roccReadyQueue = Module( new Queue(new ReadyPacket, 64) )
 	dontTouch(roccReadyQueue.io.count)
 	val roccReadyQueueEnqCounter = dontTouch(RegInit(0.U(64.W)))
 	roccReadyQueueEnqCounter := Mux(roccReadyQueue.io.enq.fire(), roccReadyQueueEnqCounter + 1.U, roccReadyQueueEnqCounter)
 	val roccReadyQueueDeqCounter = dontTouch(RegInit(0.U(64.W)))
 	roccReadyQueueDeqCounter := Mux(roccReadyQueue.io.deq.fire(), roccReadyQueueDeqCounter + 1.U, roccReadyQueueDeqCounter)
+
+	val coreSpecificReadyQueues = Vec(Seq.fill(nCores) { Module(new Queue(new ReadyPacket, qDepth)).io })
+
+	// This sends ready tasks back to the cores
+	for (i <- 0 until nCores) {
+					coreSpecificReadyQueues(i).enq <> wf_arbiter.io.in_resp(i)
+					io.readyQInterface(i) <> coreSpecificReadyQueues(i).deq
+	}
+
+	// This makes ready tasks be fetched from a queue that is fed by the single Ready Queue of Picos
+	wf_arbiter.io.out_resp <> roccReadyQueue.io.deq
+
+	// This makes sure that the data requests are acknowledged by the arbiter
+	// TODO: THIS SEEMS VERY DANGEROUS!
+	wf_arbiter.io.out_req.ready := true.B
+	val wf_counter = Reg(t = UInt(3.W), init = 0.U)
+
+	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.valid
+	val picosReadyInterfacePop = io.picosReadyInterface.empty
+	val picosReadyInterfaceBits = io.picosReadyInterface.data
+
+	val readyPacket = Wire(new ReadyPacket)
+
+	val num_args = RegEnable(picosReadyInterfaceBits(15, 8), wf_counter === 0.U)
+	val wf_picosID = RegEnable(picosReadyInterfaceBits(31, 0), wf_counter === 1.U)
+	val wf_parentID = RegEnable(picosReadyInterfaceBits, wf_counter === 2.U)
+
+	val canProceed = picosReadyInterfaceNotEmpty && (wf_counter < 3.U || roccReadyQueue.io.enq.fire())
+
+	readyPacket.nanosID := picosReadyInterfaceBits(31, 0)
+	readyPacket.picosID := wf_picosID
+
+	roccReadyQueue.io.enq.valid := (wf_counter === 3.U) && picosReadyInterfacePop && picosReadyInterfaceNotEmpty
+	// TODO: Check whether the following line makes sense
+	roccReadyQueue.io.enq.bits := readyPacket
+	picosReadyInterfacePop := picosReadyInterfaceNotEmpty && roccReadyQueue.io.enq.ready
+
+	when (canProceed) {
+		when (wf_counter < 3.U) {
+			wf_counter := wf_counter + 1.U 
+		} .otherwise {
+			wf_counter := 0.U
+		}
+	}
+}
+
+class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
+	val io = IO(new RealManagerIO(nCores))
+	val ret_arbiter = Module(new RRArbiter(UInt(64.W), nCores))
 
 	val retQ = Module( new Queue(UInt(64.W), qDepth) )
 	dontTouch(retQ.io.count)
@@ -152,9 +218,6 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	retQEnqCounter := Mux(retQ.io.enq.fire(), retQEnqCounter + 1.U, retQEnqCounter)
 	val retQDeqCounter = dontTouch(RegInit(0.U(64.W)))
 	retQDeqCounter := Mux(retQ.io.deq.fire(), retQDeqCounter + 1.U, retQDeqCounter)
-
-	val wf_arbiter = Module(new InOrderArbiter(UInt(0.W), new ReadyPacket, nCores))
-	val coreSpecificReadyQueues = Vec(Seq.fill(nCores) { Module(new Queue(new ReadyPacket, qDepth)).io })
 
 	// Control access to Retirement Queue with RRArbiter
 	ret_arbiter.io.in <> io.retInterface
@@ -192,78 +255,4 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	//submissionHandler.io.enabled := numInflightTasks <= 250.U(64.W)
 	submissionHandler.io.enabled := true.B
 	*/
-
-	// Implement fetching of ready packets
-	// Implement arbitration of the consumption of the single readyQueue
-	// This sends ready task requests to the arbiter
-
-	wf_arbiter.io.in_req <> io.readyRequestInterface
-
-	// This sends ready tasks back to the cores
-	for (i <- 0 until nCores) {
-					coreSpecificReadyQueues(i).enq <> wf_arbiter.io.in_resp(i)
-					io.readyQInterface(i) <> coreSpecificReadyQueues(i).deq
-	}
-
-	// This makes ready tasks be fetched from a queue that is fed by the single Ready Queue of Picos
-	wf_arbiter.io.out_resp <> roccReadyQueue.io.deq
-
-	// This makes sure that the data requests are acknowledged by the arbiter
-	// TODO: THIS SEEMS VERY DANGEROUS!
-	wf_arbiter.io.out_req.ready := true.B
-	val wf_counter = Reg(t = UInt(3.W), init = 0.U)
-	val exceptionReg = Reg(t = UInt(4.W), init = 0.U)
-
-	/*
-	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.validEquivalentIsNotEmpty
-	val picosReadyInterfacePop = io.picosReadyInterface.readyEquivalentPop
-	val picosReadyInterfaceBits = io.picosReadyInterface.data
-	*/
-	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.valid
-	val picosReadyInterfacePop = io.picosReadyInterface.empty
-	val picosReadyInterfaceBits = io.picosReadyInterface.data
-
-	val readyPacket = Wire(new ReadyPacket)
-
-	val wf_taskID_high = RegEnable(picosReadyInterfaceBits, wf_counter === 1.U)
-	val wf_taskID_low = RegEnable(picosReadyInterfaceBits, wf_counter === 3.U)
-	val wf_xor = Reg(t = UInt(32.W), init = 0.U)
-
-	val canProceed = picosReadyInterfacePop ||
-	(wf_counter === 1.U || wf_counter === 3.U || wf_counter === 7.U) || 
-	(wf_counter === 5.U && roccReadyQueue.io.enq.fire())
-
-	readyPacket.nanosID := Cat(wf_taskID_high, wf_taskID_low)
-	readyPacket.picosID := picosReadyInterfaceBits
-
-	io.pmException := exceptionReg
-
-	roccReadyQueue.io.enq.valid := (wf_counter === 5.U)
-	roccReadyQueue.io.enq.bits := readyPacket
-	picosReadyInterfacePop := picosReadyInterfaceNotEmpty && (wf_counter === 0.U || wf_counter === 2.U || wf_counter === 4.U || wf_counter === 6.U)
-
-	when (canProceed) {
-		when (wf_counter === 1.U || wf_counter === 3.U || wf_counter === 5.U) {
-			wf_xor := wf_xor ^ picosReadyInterfaceBits
-		} .otherwise {
-			when (wf_counter === 7.U) {
-				when (wf_xor =/= picosReadyInterfaceBits) {
-								exceptionReg := exceptionReg | 2.U 
-				}
-				wf_xor := 0.U
-			}
-		}
-
-		// The following change makes the system compatible with a 3-packet ready-task description
-		// wf_counter := wf_counter + 1.U 
-		when (wf_counter < 5.U) {
-			wf_counter := wf_counter + 1.U 
-		} .otherwise {
-			wf_counter := 0.U
-		}
-	}
-
-	when (wf_counter > 0.U && !picosReadyInterfaceNotEmpty) {
-		exceptionReg := exceptionReg | 1.U 
-	}
 }
