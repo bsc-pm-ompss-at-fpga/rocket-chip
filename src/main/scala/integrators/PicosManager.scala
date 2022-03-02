@@ -63,6 +63,75 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val pmException               = UInt(4.W).asOutput
 }
 
+class SubmissionHeaderGeneratorIO(numCores: Int) extends Bundle {
+				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
+				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
+				val routingInfo								= Decoupled((new RoutingInfo(2, 4 + 15 + 15))
+				val picosSubData							= Decoupled(UInt(64.W))
+				val coreID										= Input(UInt(log2Ceil(numCores).W))
+}
+
+class SubmissionHeaderGenerator extends Module {
+				val io = IO(new SubmissionHeaderGeneratorIO)
+				val cycleLength = 3
+
+				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
+				// TODO: Check whether this should be initialized to 0 or 1
+				val taskNumberCounter = RegInit(1.U(32.W))
+
+				val wrapCounter = counter === (cycleLength - 1).U
+				val routingPacketWasSent = RegInit(false.B)
+
+				io.argsAndParentInfo.ready := false.B
+				io.taskInfo.ready := false.B
+				io.routingInfo.valid := false.B
+				io.picosSubData.valid := false.B
+
+				val numDeps = io.taskInfo.bits.num_deps
+				val numArgs = 0.U(4.W)
+				val nanosID = io.taskInfo.bits.task_id
+				val sixZeros = 0.U(6.W)
+				val eightZeros = 0.U(8.W)
+				val sixteenZeros = 0.U(16.W)
+
+				// TODO: This will need to be modified when we start supporting nested tasks
+				switch (counter) {
+					is (0.U) {
+						io.routingInfo.valid := io.taskInfo.valid && !routingPacketWasSent
+						io.routingInfo.bits.arbID := coreID
+						io.routingInfo.bits.numPackets := 4 + numDeps + numArgs
+
+						io.picosSubData.bits := Cat(Seq(taskNumberCounter, eightZeros, numDeps, sixteenZeros))
+						io.picosSubData.valid := io.taskInfo.valid && (io.routingInfo.fire() || routingPacketWasSent)
+
+						when (io.routingInfo.fire()) {
+							routingPacketWasSent := true.B
+						}
+					}
+					is (1.U) {
+						io.picosSubData.bits := 0.U
+						io.picosSubData.valid := true.B
+					}
+					is (2.U) {
+						io.picosSubData.bits := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
+						io.picosSubData.valid := io.taskInfo.valid
+
+						// The following will ensure data at taskInfo is consumed 
+						// when an out transaction is performed
+						io.taskInfo.ready := io.picosSubData.ready
+					}
+				}
+
+				when (io.picosSubData.fire()) {
+					when (wrapCounter) {
+						counter := 0.U
+						routingPacketWasSent := false.B
+					} .otherwise {
+						counter := counter + 1.U
+					}
+				}
+}
+
 class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
 				val io = IO(new Bundle {
 								val tag                   = Flipped(Vec(nCores, UInt(64.W).asOutput))
