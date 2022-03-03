@@ -322,7 +322,7 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
   it should "only return valid data if nanos_id_work_fetching has previously returned valid data itself, even if there is valid data at readyQInterface" in {
 		val testRd0 = 4
 		val testRd1 = 11
-		val testValuePicosID = 74892309894870923L
+		val testValuePicosID = 989870923L
 		val testValueNanosID = 2394870923L
     var requestWillSucceed = false
     var numSuccessfulRequests = 0
