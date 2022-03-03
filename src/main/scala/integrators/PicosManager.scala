@@ -63,6 +63,44 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val pmException               = UInt(4.W).asOutput
 }
 
+trait HasDepInfo extends Bundle{
+				val depInfo   							  = Flipped(Decoupled(Vec(2, new DepInfo)))
+}
+
+class DependenceInfoAdapterIO extends Bundle {
+				val depInfo   							  = Flipped(Decoupled(Vec(2, new DepInfo)))
+				val picosSubData							= Decoupled(UInt(64.W))
+}
+
+class DependenceInfoAdapter extends Module {
+				val io = IO(new DependenceInfoAdapterIO)
+
+				val VOID_TYPE = 0.U
+				val IN_TYPE = 1.U
+				val OUT_TYPE = 2.U
+				val IOUT_TYPE = 3.U
+
+				val secondSubmissionPending = RegInit(false.B)
+				val activeDep = RegInit(0.U(1.W))
+				val twoZeros = 0.U(2.W)
+
+				// ASSUMPTION: If only one of the dependencies described
+				//             depInfo is valid, that is always going to
+				//             be depInfo(0), not depInfo(1)
+				when (io.depInfo.bits(1).kind === VOID_TYPE) {
+					io.depInfo.ready := io.picosSubData.ready
+					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(0).kind, twoZeros, io.depInfo.bits(0).pointer))
+					io.picosSubData.valid := io.depInfo.valid
+				} .otherwise {
+					io.depInfo.ready := io.picosSubData.ready && (activeDep === 1.U)
+					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(activeDep).kind, twoZeros, io.depInfo.bits(activeDep).pointer))
+					io.picosSubData.valid := io.depInfo.valid
+					when (io.picosSubData.fire()) {
+						activeDep := activeDep + 1.U
+					}
+				}
+}
+
 class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
 				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
 				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
@@ -178,6 +216,10 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 						counter := counter + 1.U
 					}
 				}
+}
+
+class CoreSpecificSubmissionHandler(nCores: Int) extends Module {
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasDepInfo)
 }
 
 class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {

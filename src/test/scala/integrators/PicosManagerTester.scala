@@ -1,6 +1,7 @@
 package freechips.rocketchip.integrators
 
 import chisel3._
+import chisel3.util._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -187,32 +188,10 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         } while (tryAgain)
       }
 
-      /*
-      val activateRoutingInfoConsumption = () => {
-        c.io.routingInfo.ready.poke(true.B)
-      }
-
-      val deactivateRoutingInfoConsumptionIfFired = () => {
-        if (c.io.routingInfo.ready.peek().litToBoolean) {
-          c.io.routingInfo.ready.poke(false.B)
-        }
-      }
-
-      val activateOuterRoutingInfoConsumption = () => {
-        c.io.routingInfoOuter.ready.poke(true.B)
-      }
-
-      val deactivateOuterRoutingInfoConsumptionIfFired = () => {
-        if (c.io.routingInfoOuter.ready.peek().litToBoolean) {
-          c.io.routingInfoOuter.ready.poke(false.B)
-        }
-      }
-      */
-
       val checkPacket0 = (numDeps: Int, taskNumber: Long) => {
         c.io.picosSubData.valid.expect(true.B)
         val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-        println(toHexString(picosSubPacket))
+        //println(toHexString(picosSubPacket))
         assert(((picosSubPacket >> 16) & 0xf) == numDeps)
         assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
       }
@@ -228,7 +207,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
         c.io.picosSubData.valid.expect(true.B)
         val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-        println(toHexString(picosSubPacket))
+        //println(toHexString(picosSubPacket))
         assert(((picosSubPacket >> 32) & 0x3) == FPGA_MASK)
         assert(((picosSubPacket >> 40) & 0xff) == RUN_ON_ANY_ACCELERATOR_MASK)
         assert((picosSubPacket & 0xffffffffL) == nanosID)
@@ -264,7 +243,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.coreID.poke(testedCoreID.U)
 
       for (i <- 0 until 100) {
-        println("Running iteration " + i)
+        //println("Running iteration " + i)
         val testedTaskNumber = i + 1
         val testedNumDeps = r.nextInt(16)
         val testedParentID = r.nextLong() & 0xffffffffL
@@ -332,5 +311,134 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           waitRandomAmountOfCycles()
       }
     }
+  }
+	behavior of "DependenceInfoAdapter"
+  it should "generate one Picos submission packet per depInfo packet whenever the second dependence is invalid" in {
+      test(new DependenceInfoAdapter) { c =>
+          val INVALID_TYPE = 0
+          val IN_TYPE = 1
+          val OUT_TYPE = 2
+          val INOUT_TYPE = 3
+
+          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
+              c.io.depInfo.valid.poke(true.B)
+              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
+              c.io.depInfo.bits(0).kind.poke(kind0.U)
+              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
+              c.io.depInfo.bits(1).kind.poke(kind1.U)
+          }
+
+          val unplaceDepInfo = () => {
+              c.io.depInfo.valid.poke(false.B)
+              c.io.depInfo.bits(0).pointer.poke(0.U)
+              c.io.depInfo.bits(0).kind.poke(0.U)
+              c.io.depInfo.bits(1).pointer.poke(0.U)
+              c.io.depInfo.bits(1).kind.poke(0.U)
+          }
+
+          for (i <- 0 until 100) {
+            val testPointer = r.nextLong() & 0xffffffffffffffL
+            val testKind = r.nextInt(3) + 1
+
+            c.io.picosSubData.ready.poke(true.B)
+            placeDepInfo(testPointer, testKind, 0, INVALID_TYPE)
+
+            c.io.picosSubData.valid.expect(true.B)
+            c.io.picosSubData.bits.expect((BigInt(testKind) << 58 | BigInt(testPointer)).U(64.W))
+              c.clock.step()
+          }
+      }
+  }
+
+  it should "generate two Picos submission packets per depInfo packet whenever the second dependence is valid" in {
+      test(new DependenceInfoAdapter) { c =>
+          val INVALID_TYPE = 0
+          val IN_TYPE = 1
+          val OUT_TYPE = 2
+          val INOUT_TYPE = 3
+
+          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
+              c.io.depInfo.valid.poke(true.B)
+              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
+              c.io.depInfo.bits(0).kind.poke(kind0.U)
+              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
+              c.io.depInfo.bits(1).kind.poke(kind1.U)
+          }
+
+          val unplaceDepInfo = () => {
+              c.io.depInfo.valid.poke(false.B)
+              c.io.depInfo.bits(0).pointer.poke(0.U)
+              c.io.depInfo.bits(0).kind.poke(0.U)
+              c.io.depInfo.bits(1).pointer.poke(0.U)
+              c.io.depInfo.bits(1).kind.poke(0.U)
+          }
+
+          for (i <- 0 until 100) {
+            val testPointer0 = r.nextLong() & 0xffffffffffffffL
+            val testKind0 = r.nextInt(3) + 1
+            val testPointer1 = r.nextLong() & 0xffffffffffffffL
+            val testKind1 = r.nextInt(3) + 1
+
+            c.io.picosSubData.ready.poke(true.B)
+            placeDepInfo(testPointer0, testKind0, testPointer1, testKind1)
+
+            c.io.picosSubData.valid.expect(true.B)
+            c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
+
+              c.clock.step()
+
+            c.io.picosSubData.valid.expect(true.B)
+            c.io.picosSubData.bits.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
+
+              c.clock.step()
+          }
+      }
+  }
+
+  it should "be able handle depInfo sequences where some entries have two valid dependencies and others have only one" in {
+      test(new DependenceInfoAdapter) { c =>
+          val INVALID_TYPE = 0
+          val IN_TYPE = 1
+          val OUT_TYPE = 2
+          val INOUT_TYPE = 3
+
+          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
+              c.io.depInfo.valid.poke(true.B)
+              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
+              c.io.depInfo.bits(0).kind.poke(kind0.U)
+              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
+              c.io.depInfo.bits(1).kind.poke(kind1.U)
+          }
+
+          val unplaceDepInfo = () => {
+              c.io.depInfo.valid.poke(false.B)
+              c.io.depInfo.bits(0).pointer.poke(0.U)
+              c.io.depInfo.bits(0).kind.poke(0.U)
+              c.io.depInfo.bits(1).pointer.poke(0.U)
+              c.io.depInfo.bits(1).kind.poke(0.U)
+          }
+
+          for (i <- 0 until 100) {
+            val testPointer0 = r.nextLong() & 0xffffffffffffffL
+            val testKind0 = r.nextInt(3) + 1
+            val testPointer1 = r.nextLong() & 0xffffffffffffffL
+            val testKind1 = r.nextInt(4)
+
+            c.io.picosSubData.ready.poke(true.B)
+            placeDepInfo(testPointer0, testKind0, testPointer1, testKind1)
+
+            c.io.picosSubData.valid.expect(true.B)
+            c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
+
+              c.clock.step()
+
+            if (testKind1 != 0) {
+              c.io.picosSubData.valid.expect(true.B)
+              c.io.picosSubData.bits.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
+
+                c.clock.step()
+            }
+          }
+      }
   }
 }
