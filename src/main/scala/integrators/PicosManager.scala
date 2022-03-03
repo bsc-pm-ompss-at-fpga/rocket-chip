@@ -63,16 +63,27 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val pmException               = UInt(4.W).asOutput
 }
 
-class SubmissionHeaderGeneratorIO(numCores: Int) extends Bundle {
+class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
 				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
 				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
-				val routingInfo								= Decoupled((new RoutingInfo(2, 4 + 15 + 15))
+
+				// This is used for feeding the 2-entry GuidedArbiter
+				// that is instantiated for each core, which builds
+				// complete submission sequences from the output of
+				// SubmissionHeaderGenerator and the DependencyAdapter
+				val routingInfo								= Decoupled((new RoutingInfo(2, 3 + 15 + 15)))
+
+				// This is used for feeding the nCores-entry GuidedArbiter
+				// that is fed by the core-specific GuidedArbiter building
+				// submission sequences out of elementary data
+				val routingInfoOuter					= Decoupled((new RoutingInfo(nCores, 3 + 15 + 15)))
+
 				val picosSubData							= Decoupled(UInt(64.W))
-				val coreID										= Input(UInt(log2Ceil(numCores).W))
+				val coreID										= Input(UInt(log2Ceil(nCores).W))
 }
 
-class SubmissionHeaderGenerator extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO)
+class SubmissionHeaderGenerator(nCores: Int) extends Module {
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores))
 				val cycleLength = 3
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
@@ -80,7 +91,9 @@ class SubmissionHeaderGenerator extends Module {
 				val taskNumberCounter = RegInit(1.U(32.W))
 
 				val wrapCounter = counter === (cycleLength - 1).U
-				val routingPacketWasSent = RegInit(false.B)
+				val headerInnerRoutingPacketWasSent = RegInit(false.B)
+				val payloadInnerRoutingPacketWasSent = RegInit(false.B)
+				val outerRoutingPacketWasSent = RegInit(false.B)
 
 				io.argsAndParentInfo.ready := false.B
 				io.taskInfo.ready := false.B
@@ -91,33 +104,65 @@ class SubmissionHeaderGenerator extends Module {
 				val numArgs = 0.U(4.W)
 				val nanosID = io.taskInfo.bits.task_id
 				val sixZeros = 0.U(6.W)
-				val eightZeros = 0.U(8.W)
+				val twelveZeros = 0.U(12.W)
 				val sixteenZeros = 0.U(16.W)
 
 				// TODO: This will need to be modified when we start supporting nested tasks
 				switch (counter) {
 					is (0.U) {
-						io.routingInfo.valid := io.taskInfo.valid && !routingPacketWasSent
-						io.routingInfo.bits.arbID := coreID
-						io.routingInfo.bits.numPackets := 4 + numDeps + numArgs
+						// TODO: We still need to produce the routing packets for the dependence sequence
+						io.routingInfo.valid := io.taskInfo.valid && !headerInnerRoutingPacketWasSent
+						io.routingInfo.bits.arbID := 0.U
+						io.routingInfo.bits.numPackets := 3.U
 
-						io.picosSubData.bits := Cat(Seq(taskNumberCounter, eightZeros, numDeps, sixteenZeros))
-						io.picosSubData.valid := io.taskInfo.valid && (io.routingInfo.fire() || routingPacketWasSent)
+						io.routingInfoOuter.valid := io.taskInfo.valid && !outerRoutingPacketWasSent
+						io.routingInfoOuter.bits.arbID := io.coreID
+						// The following operation must be carried out with at least 6-bit precision
+						// because we need to be able to describe up to 33 packets per sequence
+						io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
+
+						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
+
+						// The following ensures we do not leave this state before
+						// the header inner routing packet is sent to the leaf
+						// core-specific submission GuidedArbiter and the outer
+						// routing packet is sent to the master submission GuidedArbiter
+						io.picosSubData.valid := io.taskInfo.valid && (io.routingInfo.fire() || headerInnerRoutingPacketWasSent) && (io.routingInfoOuter.fire() || outerRoutingPacketWasSent)
 
 						when (io.routingInfo.fire()) {
-							routingPacketWasSent := true.B
+							headerInnerRoutingPacketWasSent := true.B
+						}
+
+						when (io.routingInfoOuter.fire()) {
+							outerRoutingPacketWasSent := true.B
 						}
 					}
 					is (1.U) {
 						io.picosSubData.bits := 0.U
-						io.picosSubData.valid := true.B
+
+						io.routingInfo.valid := io.taskInfo.valid && !payloadInnerRoutingPacketWasSent
+						io.routingInfo.bits.arbID := 1.U
+						// TODO: Check if this is actually synthesized with 6-bit precision
+						io.routingInfo.bits.numPackets := 0.U(6.W) + numDeps + numArgs
+
+						// The following ensures we do not leave this state before
+						// the payload inner routing packet is sent to the leaf
+						// core-specific submission GuidedArbiter
+						io.picosSubData.valid := io.routingInfo.fire() || payloadInnerRoutingPacketWasSent
+
+						when (io.routingInfo.fire()) {
+							payloadInnerRoutingPacketWasSent := true.B
+						}
 					}
 					is (2.U) {
 						io.picosSubData.bits := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
 						io.picosSubData.valid := io.taskInfo.valid
 
 						// The following will ensure data at taskInfo is consumed 
-						// when an out transaction is performed
+						// when an out transaction is performed.
+						// We here assume that valid inputs will never change
+						// since they are first asserted and the transaction
+						// is finally completed.
 						io.taskInfo.ready := io.picosSubData.ready
 					}
 				}
@@ -125,7 +170,10 @@ class SubmissionHeaderGenerator extends Module {
 				when (io.picosSubData.fire()) {
 					when (wrapCounter) {
 						counter := 0.U
-						routingPacketWasSent := false.B
+						headerInnerRoutingPacketWasSent := false.B
+						payloadInnerRoutingPacketWasSent := false.B
+						outerRoutingPacketWasSent := false.B
+						taskNumberCounter := taskNumberCounter + 1.U
 					} .otherwise {
 						counter := counter + 1.U
 					}
