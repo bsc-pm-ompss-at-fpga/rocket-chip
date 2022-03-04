@@ -101,15 +101,17 @@ class DependenceInfoAdapter extends Module {
 				}
 }
 
-class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
-				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
-				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
-
+trait HasInnerRoutingInfo extends Bundle {
 				// This is used for feeding the 2-entry GuidedArbiter
 				// that is instantiated for each core, which builds
 				// complete submission sequences from the output of
 				// SubmissionHeaderGenerator and the DependencyAdapter
 				val routingInfo								= Decoupled((new RoutingInfo(2, 3 + 15 + 15)))
+}
+
+class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
+				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
+				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
 
 				// This is used for feeding the nCores-entry GuidedArbiter
 				// that is fed by the core-specific GuidedArbiter building
@@ -121,7 +123,7 @@ class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
 }
 
 class SubmissionHeaderGenerator(nCores: Int) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores))
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasInnerRoutingInfo)
 				val cycleLength = 3
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
@@ -220,6 +222,33 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 
 class CoreSpecificSubmissionHandler(nCores: Int) extends Module {
 				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasDepInfo)
+
+				val picosPacketType = UInt(64.W)
+				val maxSequenceLength = 3 + 15 + 15
+				val downtimeBetweenSubmissions = 0
+
+				val headerGenerator = Module(new SubmissionHeaderGenerator(nCores))
+				val dependenceInfoAdapter = Module(new DependenceInfoAdapter)
+				val leafGuidedArbiter = Module(new GuidedArbiter(picosPacketType, 2, maxSequenceLength, downtimeBetweenSubmissions))
+
+				val leafRoutingPacketsQueue = Module(new Queue(new RoutingInfo(2, 3 + 15 + 15), 2))
+
+				headerGenerator.io.coreID := io.coreID
+				headerGenerator.io.argsAndParentInfo := io.argsAndParentInfo
+				headerGenerator.io.taskInfo := io.taskInfo
+				io.routingInfoOuter := headerGenerator.io.routingInfoOuter
+
+				dependenceInfoAdapter.io.depInfo := io.depInfo
+
+				// TODO: Check whether it would make sense
+				//			 to disable it at any moment
+				leafGuidedArbiter.io.enabled := true.B
+
+				leafRoutingPacketsQueue.io.enq <> headerGenerator.io.routingInfo
+				leafGuidedArbiter.io.routingInfo <> leafRoutingPacketsQueue.io.deq
+				leafGuidedArbiter.io.in(0) <> headerGenerator.io.picosSubData
+				leafGuidedArbiter.io.in(1) <> dependenceInfoAdapter.io.picosSubData
+				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
 class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
