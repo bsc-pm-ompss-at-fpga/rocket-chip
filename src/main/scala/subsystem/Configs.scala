@@ -108,6 +108,55 @@ class WithNBigCores(n: Int, overrideIdOffset: Option[Int] = None) extends Config
   }
 })
 
+class WithNBigCoresAndArbitraryL1Sizes(n: Int, iSets: Int = 64, dSets: Int = 64, iWays: Int = 4, dWays: Int = 4, overrideIdOffset: Option[Int] = None) extends Config((site, here, up) => {
+  case RocketTilesKey => {
+    val prev = up(RocketTilesKey, site)
+    val idOffset = overrideIdOffset.getOrElse(prev.size)
+    val big = RocketTileParams(
+      core   = RocketCoreParams(
+        haveCFlush = true,
+        mulDiv = Some(MulDivParams(
+        mulUnroll = 8,
+        mulEarlyOut = true,
+        divEarlyOut = true))),
+      dcache = Some(DCacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        nMSHRs = 0,
+        nWays = dWays,
+        nSets = dSets,
+        blockBytes = site(CacheBlockBytes))),
+      icache = Some(ICacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        nWays = iWays,
+        nSets = iSets,
+        blockBytes = site(CacheBlockBytes))))
+    List.tabulate(n)(i => big.copy(hartId = i + idOffset)) ++ prev
+  }
+})
+
+class WithNBigCores64KBL1IAnd16KBL1D(n: Int, overrideIdOffset: Option[Int] = None) extends Config((site, here, up) => {
+  case RocketTilesKey => {
+    val prev = up(RocketTilesKey, site)
+    val idOffset = overrideIdOffset.getOrElse(prev.size)
+    val big = RocketTileParams(
+      core   = RocketCoreParams(
+        haveCFlush = true,
+        mulDiv = Some(MulDivParams(
+        mulUnroll = 8,
+        mulEarlyOut = true,
+        divEarlyOut = true))),
+      dcache = Some(DCacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        nSets = 256,
+        nMSHRs = 0,
+        blockBytes = site(CacheBlockBytes))),
+      icache = Some(ICacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        blockBytes = site(CacheBlockBytes))))
+    List.tabulate(n)(i => big.copy(hartId = i + idOffset)) ++ prev
+  }
+})
+
 class WithNMedCores(n: Int, overrideIdOffset: Option[Int] = None) extends Config((site, here, up) => {
   case RocketTilesKey => {
     val prev = up(RocketTilesKey, site)
