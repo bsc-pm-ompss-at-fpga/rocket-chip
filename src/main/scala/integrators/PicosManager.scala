@@ -3,7 +3,7 @@ package freechips.rocketchip.integrators
 import Chisel._
 //import chisel3.iotesters._
 //import org.scalatest._
-import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, ZeroPadder, DelayerAdapter, TDIOMuxPC}
+import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, DelayerAdapter}
 import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import chisel3.dontTouch
@@ -220,11 +220,10 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 				}
 }
 
-class CoreSpecificSubmissionHandler(nCores: Int) extends Module {
+class CoreSpecificSubmissionHandler(nCores: Int, maxSequenceLength: Int = 33) extends Module {
 				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasDepInfo)
 
 				val picosPacketType = UInt(64.W)
-				val maxSequenceLength = 3 + 15 + 15
 				val downtimeBetweenSubmissions = 0
 
 				val headerGenerator = Module(new SubmissionHeaderGenerator(nCores))
@@ -251,83 +250,44 @@ class CoreSpecificSubmissionHandler(nCores: Int) extends Module {
 				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
-class SubmissionHandler[T <: Data](nCores: Int, typ: T, burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
+class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
 				val io = IO(new Bundle {
-								val tag                   = Flipped(Vec(nCores, UInt(64.W).asOutput))
-								val subQInterface         = Flipped(Vec(nCores, Decoupled(typ.cloneType)))
-								val subRequest            = Flipped(Vec(nCores, Decoupled(RoutingInfo(nCores, burstSizeWithZeros))))
+								val argsAndParentInfoVec  = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
+								val taskInfoVec 		      = Flipped(Vec(nCores, Decoupled(new TaskInfo)))
+								val picosAckInterface 		= Flipped(new PicosFifoBundle(UInt(2.W)))
+
 								val picosSubMaster        = Decoupled(typ.cloneType)
 								val numStartedSubmissions = UInt(64.W).asOutput
 								val enabled               = Bool().asInput
 				})
 
-				val taggedMuxPC = Module(new TDIOMuxPC(typ.cloneType, nCores))
-				val routingRequestArbiter = Module(new RRArbiter(RoutingInfo(nCores, burstSizeWithZeros), nCores))
-				val guidedArbiter = Module(new GuidedArbiter(typ.cloneType, nCores, burstSizeWithZeros, numDownCycles))
-				guidedArbiter.io.enabled := io.enabled
+				val maxSequenceLength = 3 + 15 + 15
 
-				val routingQ = Module(new Queue(RoutingInfo(nCores, burstSizeWithZeros), routingQDepth))
-				dontTouch(routingQ.io.count)
-
-				val routingQEnqCounter = dontTouch(RegInit(0.U(64.W)))
-				routingQEnqCounter := Mux(routingQ.io.enq.fire(), routingQEnqCounter + 1.U, routingQEnqCounter)
-				val routingQDeqCounter = dontTouch(RegInit(0.U(64.W)))
-				routingQDeqCounter := Mux(routingQ.io.deq.fire(), routingQDeqCounter + 1.U, routingQDeqCounter)
-
-				val zeroPadder = Module (new ZeroPadder(typ.cloneType, burstSizeWithZeros))
-
-				//val finalBuffer = Module (new Queue(typ.cloneType, burstSizeWithZeros))
-				val finalBuffer = Module (new Queue(typ.cloneType, 1))
-
-				val waitingForRoutingPacket = guidedArbiter.io.routingInfo.ready
-				val waitingForNewBurst = RegEnable(!routingQ.io.deq.fire(), true.B, waitingForRoutingPacket)
-
-				when (routingQ.io.deq.fire()) {
-								waitingForNewBurst := false.B
-				}
-
-				/*
-				val remaining_packets_this_burst = RegInit(UInt(burstSizeWithZeros))
-
-				when (finalBuffer.io.enq.fire()) {
-								remaining_packets_this_burst := remaining_packets_this_burst - 1.U
-				}
-
-				when (remaining_packets_this_burst === 0.U) {
-								when (finalBuffer.io.enq.fire()) {
-												remaining_packets_this_burst := UInt(burstSizeWithZeros - 1)
-												} .otherwise {
-																remaining_packets_this_burst := UInt(burstSizeWithZeros)
-												}
-				}
-
-				zeroPadder.io.in <> guidedArbiter.io.out
-				zeroPadder.io.startPadding := waitingForRoutingPacket && !waitingForNewBurst && remaining_packets_this_burst > 0.U
-				finalBuffer.io.enq <> zeroPadder.io.out
-				*/
-
-				io.numStartedSubmissions := routingQDeqCounter
-
-				routingRequestArbiter.io.in <> io.subRequest
-				routingQ.io.enq <> routingRequestArbiter.io.out
-				guidedArbiter.io.routingInfo <> routingQ.io.deq
-
-				val coreSpecificQueues = Vec(Seq.fill(nCores) { Module(new Queue(typ.cloneType, 4 * burstSizeWithZeros)).io })
+				val coreSubmissionHandlers = Vec(nCores, Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength)).io)
+				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, 0))
+				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 
 				for (i <- 0 until nCores) {
-								 coreSpecificQueues(i).enq <> io.subQInterface(i)
-								 guidedArbiter.io.in(i) <> coreSpecificQueues(i).deq
+					coreSubmissionHandlers(i).taskInfo := io.taskInfoVec(i)
+					coreSubmissionHandlers(i).argsAndParentInfo := io.argsAndParentInfoVec(i)
+					coreSubmissionHandlers(i).coreID := i.U(log2Ceil(nCores).W)
+					masterGuidedArbiter.io.in(i) <> coreSubmissionHandlers(i).picosSubData
+					routingArbiter.io.in <> coreSubmissionHandlers(i).routingInfoOuter
 				}
-        
-				val delayerAdapter = Module(new DelayerAdapter(typ.cloneType))
-				val delayerAdapterPushCounter = dontTouch(RegInit(0.U(64.W)))
-				delayerAdapterPushCounter := Mux(delayerAdapter.io.in.fire(), delayerAdapterPushCounter + 1.U, delayerAdapterPushCounter)
-				val delayerAdapterPopCounter = dontTouch(RegInit(0.U(64.W)))
-				delayerAdapterPopCounter := Mux(delayerAdapter.io.out.fire(), delayerAdapterPopCounter + 1.U, delayerAdapterPopCounter)
 
-				//delayerAdapter.io.in <> finalBuffer.io.deq
-				delayerAdapter.io.in <> guidedArbiter.io.out
-				io.picosSubMaster <> delayerAdapter.io.out
+				val awaitingAcknowledgement = RegInit(false.B)
+
+				masterGuidedArbiter.io.enabled := !awaitingAcknowledgement
+
+				io.picosAckInterface.empty := awaitingAcknowledgement
+				when (awaitingAcknowledgement) {
+					awaitingAcknowledgement := !(io.picosAckInterface.valid && (io.picosAckInterface.data === 1.U(2.W)))
+				} .otherwise {
+					awaitingAcknowledgement := masterGuidedArbiter.io.last
+				}
+
+				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
+				io.picosSubMaster <> masterGuidedArbiter.io.out
 }
 
 trait HasRPEDebugSignals extends Bundle {

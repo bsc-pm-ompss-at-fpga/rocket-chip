@@ -162,6 +162,7 @@ class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int, numDownCy
     val out = Decoupled(typ.cloneType)
     val routingInfo = Decoupled(RoutingInfo(arbN, maxBurstLength)).flip
     val enabled = Bool().asInput
+    val last = Bool().asOutput
   })
 
   val chosen = RegEnable(io.routingInfo.bits.arbID, io.routingInfo.fire())
@@ -171,9 +172,11 @@ class GuidedArbiter[T <: Data](typ: T, arbN: Int, maxBurstLength: Int, numDownCy
   io.out.valid := (burstCounter > 0.U) && io.in(chosen).valid
   io.out.bits := io.in(chosen).bits
 
+  io.last := false.B
   when (io.out.fire()) {
     when (burstCounter === 1.U) {
       remainingDownCycles := numDownCycles.U
+      io.last := true.B
     }
     burstCounter := burstCounter - 1.U
   }
