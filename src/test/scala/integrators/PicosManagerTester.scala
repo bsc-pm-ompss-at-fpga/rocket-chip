@@ -3,6 +3,8 @@ package freechips.rocketchip.integrators
 import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
+import scala.collection.mutable.ListBuffer
+import scala.util.Random._
 
 /**
   * This is a trivial example of how to run this Specification
@@ -27,7 +29,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     f"${num}%X"
   }
 
-  /*
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -436,7 +437,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           }
       }
   }
-  */
 
   val placeDepInfo = (c: CoreSpecificSubmissionHandler, pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
       c.io.depInfo.valid.poke(true.B)
