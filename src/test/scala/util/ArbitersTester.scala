@@ -5,10 +5,11 @@ import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 
-import Array._
-import scala.collection.SortedSet
+//import Array._
+//import scala.collection.SortedSet
 import scala.collection.mutable.HashMap
 import scala.util.Random._
+import scala.util.control.Breaks._
 
 /**
   * This is a trivial example of how to run this Specification
@@ -30,7 +31,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
 	r.setSeed(1000)
 
 	behavior of "ArbitraryPrefixerAndSuffixer"
-  it should "produce a n-packet sequence for every input packet process, where the first and the last of these packets are the prefix and suffix described at the module instantiation, with the option to block prefixing" in {
+  it should "produce, from an (n-2) packet sequence, an n-packet sequence where the first and the last of these packets are the prefix and suffix described at the module instantiation, with the option to block prefixing" in {
     val testPrefix = 1111111
     val testSuffix = 2222222
 
@@ -107,7 +108,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
   }
   
 	behavior of "RRArbiterWithPrefixAndSuffix"
-  it should "should let data elements coming from independent input channels to be transmitted exactly once, while also being prefixed and suffixed" in {
+  it should "let data elements coming from independent input channels to be transmitted exactly once, while also being prefixed and suffixed" in {
     val inputType = UInt(64.W)
     val sequenceLength = 3
     val prefixValue = 3
@@ -183,12 +184,154 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.out.valid.expect(false.B)
       }
 
+      c.io.enablePrefixing.poke(true.B)
+
       for (i <- 0 until numTestLoops) {
         val inputMap = generateInputMap()
 
         ensureNothingIsBeingOutputted()
         c.clock.step()
         ensureThatAllInputsAreTransmittedExactlyOnce(inputMap)
+      }
+    }
+  }
+
+	behavior of "GenerateAndSubmitPacketSequenceDependingOnAcknowledgement"
+  it should "be able to block any writes to io.out whenever there is a pending acknowledgement" in {
+    val inputType = UInt(64.W)
+    val sequenceLength = 3
+    val prefixValue = 111
+    val suffixValue = 333
+    val numTestLoops = 100
+
+    test(new GenerateAndSubmitPacketSequenceDependingOnAcknowledgement(inputType, numTestedCores, sequenceLength, prefixValue, suffixValue)) { c =>
+      val generateInputMap = () => {                                                                                        
+        var hashMap = new HashMap[Int, Int]()                                                                                 
+        for (i <- 0 until numTestedCores) {
+          if (nextBoolean()) {
+            hashMap += (i -> i)
+          }
+        }
+        hashMap                                                                                                             
+      } 
+
+      // TODO: Apply DRY to this function
+      val checkWhetherOutputPacketIsAvailable = (value : Int, step : Boolean) => {
+        c.io.out.bits.expect(value.U)
+        c.io.out.valid.expect(true.B)
+        c.io.out.ready.poke(true.B) // After this line, we can be sure a firing has happened
+        if (step) {
+          c.clock.step()
+          c.io.out.ready.poke(false.B)
+        }
+      }
+
+      val generateEmptyInputMap = () => {
+        var hashMap = new HashMap[Int, Int]()                                                                                 
+      }
+
+      val driveEmptyInputMap = () => {
+        for (i <- 0 until numTestedCores) {
+          c.io.in(i).valid.poke(false.B)
+        }
+      }
+
+      val driveInputMap = (inputMap : HashMap[Int, Int]) => {
+        driveEmptyInputMap()
+        inputMap.foreach{ case (idx, value) =>
+          c.io.in(idx).valid.poke(true.B)
+          c.io.in(idx).bits.poke(value.U)
+        }
+      }
+
+      val ensureThatOneSequenceIsTransmitted = (inputMap : HashMap[Int, Int]) => {
+        val numElements = inputMap.size
+        assert(numElements != 0)
+
+        driveInputMap(inputMap)
+        checkWhetherOutputPacketIsAvailable(prefixValue, true)
+        c.io.out.ready.poke(true.B)
+        c.io.out.valid.expect(true.B)
+
+        val fetchedValue = c.io.out.bits.peek().litValue.toInt
+
+        assert(inputMap.contains(fetchedValue))
+        inputMap.remove(fetchedValue)
+        c.clock.step()
+        c.io.out.ready.poke(false.B)
+        checkWhetherOutputPacketIsAvailable(suffixValue, true)
+        driveInputMap(inputMap)
+      }
+
+      val setAckSignal = () => {
+        c.io.picosAckInterface.valid.poke(true.B)
+        c.io.picosAckInterface.data.poke(1.U)
+      }
+
+      val unsetAckSignal = () => {
+        c.io.picosAckInterface.valid.poke(false.B)
+        c.io.picosAckInterface.data.poke(0.U)
+      }
+
+      val waitRandomAmountOfCycles = () => {
+        val numWaitCycles = r.nextInt(20)
+        for (k <- 0 until numWaitCycles) {
+          c.clock.step()
+        }
+      }
+
+      val ensureThatOneButNoMoreSequencesAreTransmitted = (inputMap : HashMap[Int, Int]) => {
+        ensureThatOneSequenceIsTransmitted(inputMap)
+        val fetchedValue = c.io.out.bits.peek().litValue.toInt
+        //println(s"[ensureThatOneButNoMoreSequencesAreTransmitted]: (fetchedValue) = ${fetchedValue}")
+        waitRandomAmountOfCycles()
+        c.io.out.valid.expect(false.B)
+        c.clock.step()
+      }
+
+      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap : HashMap[Int, Int]) => {
+        val numElements = inputMap.size
+        driveInputMap(inputMap)
+        for (i <- 0 until numElements) {
+          checkWhetherOutputPacketIsAvailable(prefixValue, true)
+          c.io.out.ready.poke(true.B)
+          c.io.out.valid.expect(true.B)
+
+          val fetchedValue = c.io.out.bits.peek().litValue.toInt
+
+          assert(inputMap.contains(fetchedValue))
+          inputMap.remove(fetchedValue)
+          c.clock.step()
+          c.io.out.ready.poke(false.B)
+          checkWhetherOutputPacketIsAvailable(suffixValue, true)
+          driveInputMap(inputMap)
+        }
+        assert(inputMap.size == 0)
+
+        c.io.out.ready.poke(true.B)
+        c.io.out.valid.expect(false.B)
+        c.clock.step()
+        c.io.out.ready.poke(false.B)
+      }
+
+      val ensureNothingIsBeingOutputted = () => {
+        c.io.out.valid.expect(false.B)
+      }
+
+      for (i <- 0 until numTestLoops) {
+        val inputMap = generateInputMap()
+        val numElements = inputMap.size
+
+        ensureNothingIsBeingOutputted()
+        breakable {
+          for (i <- 0 until numElements) {
+            ensureThatOneButNoMoreSequencesAreTransmitted(inputMap)
+            setAckSignal()
+            c.clock.step()
+            unsetAckSignal()
+            c.clock.step()
+          }
+        }
       }
     }
   }

@@ -4,6 +4,7 @@ package freechips.rocketchip.util
 
 import Chisel._
 import freechips.rocketchip.config.Parameters
+import freechips.rocketchip.integrators.{PicosFifoBundle}
 
 /** A generalized locking RR arbiter that addresses the limitations of the
  *  version in the Chisel standard library */
@@ -428,10 +429,12 @@ class ArbitrarySuffixer[T <: Data](typ: T, burstSizeWithSuffix: Int, suffixValue
   val io = IO(new Bundle {
     val in = Decoupled(typ.cloneType).flip
     val out = Decoupled(typ.cloneType)
+    val suffixing = Output(Wire(Bool()))
   })
 
   val counter = RegInit(UInt(burstSizeWithSuffix - 1))
   val suffixNow = counter === 0.U
+  io.suffixing := suffixNow
 
   when (suffixNow) {
     io.in.ready := false.B
@@ -484,6 +487,7 @@ class ArbitraryPrefixerAndSuffixer[T <: Data](typ: T, burstSizeWithPrefixAndSuff
     val in = Decoupled(typ.cloneType).flip
     val out = Decoupled(typ.cloneType)
     val enablePrefixing = Input(Wire(Bool()))
+    val suffixing = Output(Wire(Bool()))
   })
 
   val prefixer = Module(new ArbitraryPrefixer(typ, burstSizeWithPrefixAndSuffix - 1, prefixValue))
@@ -493,12 +497,15 @@ class ArbitraryPrefixerAndSuffixer[T <: Data](typ: T, burstSizeWithPrefixAndSuff
   prefixer.io.in <> io.in
   suffixer.io.in <> prefixer.io.out
   io.out <> suffixer.io.out
+  io.suffixing := suffixer.io.suffixing
 }
 
 class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
   val io = IO(new Bundle {
     val in = Vec(numProducers, Decoupled(typ.cloneType)).flip
     val out = Decoupled(typ.cloneType)
+    val last = Output(Wire(Bool()))
+    val enablePrefixing = Input(Wire(Bool()))
   })
 
   val arbitraryPrefixerAndSuffixer = Module(new ArbitraryPrefixerAndSuffixer(typ, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
@@ -506,6 +513,30 @@ class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSi
 
   roundRobinArbiter.io.in <> io.in
   arbitraryPrefixerAndSuffixer.io.in <> roundRobinArbiter.io.out
-  arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid
+  arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid && io.enablePrefixing
   io.out <> arbitraryPrefixerAndSuffixer.io.out
+  io.last := arbitraryPrefixerAndSuffixer.io.suffixing
+}
+
+class GenerateAndSubmitPacketSequenceDependingOnAcknowledgement[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Vec(numProducers, Decoupled(typ.cloneType)).flip
+    val out = Decoupled(typ.cloneType)
+    val picosAckInterface = Flipped(new PicosFifoBundle(UInt(2.W)))
+  })
+
+  val arbiter = Module(new RRArbiterWithPrefixAndSuffix(typ, numProducers, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
+
+  val awaitingAcknowledgement = RegInit(false.B)
+
+  arbiter.io.in <> io.in
+  arbiter.io.enablePrefixing := !awaitingAcknowledgement
+  io.out <> arbiter.io.out
+
+  io.picosAckInterface.empty := awaitingAcknowledgement
+  when (awaitingAcknowledgement) {
+    awaitingAcknowledgement := !(io.picosAckInterface.valid && (io.picosAckInterface.data === 1.U(2.W)))
+  } .otherwise {
+    awaitingAcknowledgement := arbiter.io.last && arbiter.io.out.fire()
+  }
 }
