@@ -250,10 +250,11 @@ class CoreSpecificSubmissionHandler(nCores: Int, maxSequenceLength: Int = 33) ex
 				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
-class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48, routingQDepth: Int = 48, numDownCycles: Int = 200) extends Module {
+class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequenceLength: Int = 33, routingQDepth: Int = 0, numDownCycles: Int = 0) extends Module {
 				val io = IO(new Bundle {
 								val argsAndParentInfoVec  = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
 								val taskInfoVec 		      = Flipped(Vec(nCores, Decoupled(new TaskInfo)))
+								val depInfoVec  				  = Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo))))
 								val picosAckInterface 		= Flipped(new PicosFifoBundle(UInt(2.W)))
 
 								val picosSubMaster        = Decoupled(typ.cloneType)
@@ -261,18 +262,17 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWi
 								val enabled               = Bool().asInput
 				})
 
-				val maxSequenceLength = 3 + 15 + 15
-
-				val coreSubmissionHandlers = Vec(nCores, Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength)).io)
-				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, 0))
+				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength)).io}
+				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 
 				for (i <- 0 until nCores) {
-					coreSubmissionHandlers(i).taskInfo := io.taskInfoVec(i)
-					coreSubmissionHandlers(i).argsAndParentInfo := io.argsAndParentInfoVec(i)
+					coreSubmissionHandlers(i).taskInfo <> io.taskInfoVec(i)
+					coreSubmissionHandlers(i).argsAndParentInfo <> io.argsAndParentInfoVec(i)
+					coreSubmissionHandlers(i).depInfo <> io.depInfoVec(i)
 					coreSubmissionHandlers(i).coreID := i.U(log2Ceil(nCores).W)
 					masterGuidedArbiter.io.in(i) <> coreSubmissionHandlers(i).picosSubData
-					routingArbiter.io.in <> coreSubmissionHandlers(i).routingInfoOuter
+					routingArbiter.io.in(i) <> coreSubmissionHandlers(i).routingInfoOuter
 				}
 
 				val awaitingAcknowledgement = RegInit(false.B)
