@@ -1,10 +1,12 @@
 package freechips.rocketchip.integrators
 
 import chisel3._
+import chisel3.util.{DecoupledIO}
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.collection.mutable.ListBuffer
 import scala.util.Random._
+import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
 
 /**
   * This is a trivial example of how to run this Specification
@@ -29,6 +31,83 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     f"${num}%X"
   }
 
+  //val placeTaskInfo = (c: CoreSpecificSubmissionHandler, numDeps: Int, nanosID: Long) => {
+  //    c.io.taskInfo.valid.poke(true.B)
+  //    c.io.taskInfo.bits.num_deps.poke(numDeps.U)
+  //    c.io.taskInfo.bits.task_id.poke(nanosID.U)
+  //}
+
+  val placeTaskInfo = (c: DecoupledIO[TaskInfo], numDeps: Int, nanosID: Long) => {
+      c.valid.poke(true.B)
+      c.bits.num_deps.poke(numDeps.U)
+      c.bits.task_id.poke(nanosID.U)
+  }
+
+  val unplaceTaskInfo = (c: DecoupledIO[TaskInfo]) => {
+      c.valid.poke(false.B)
+      c.bits.num_deps.poke(0.U)
+      c.bits.task_id.poke(0.U)
+  }
+
+  val placeDepInfo = (c: DecoupledIO[Vec[DepInfo]], pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
+      c.valid.poke(true.B)
+      c.bits(0).pointer.poke(pointer0.U)
+      c.bits(0).kind.poke(kind0.U)
+      c.bits(1).pointer.poke(pointer1.U)
+      c.bits(1).kind.poke(kind1.U)
+  }
+
+  val unplaceDepInfo = (c: DecoupledIO[Vec[DepInfo]]) => {
+      c.valid.poke(false.B)
+      c.bits(0).pointer.poke(0.U)
+      c.bits(0).kind.poke(0.U)
+      c.bits(1).pointer.poke(0.U)
+      c.bits(1).kind.poke(0.U)
+  }
+
+  val checkPacket0 = (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long) => {
+    c.valid.expect(true.B)
+    val picosSubPacket = c.bits.peek().litValue
+    //println(toHexString(picosSubPacket))
+    assert(((picosSubPacket >> 16) & 0xf) == numDeps)
+    assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
+  }
+
+  // TODO: Implement once we start supporting nesting
+  val checkPacket1 = (c: DecoupledIO[UInt], parentID: Long) => {
+    c.valid.expect(true.B)
+  }
+
+  val checkPacket2 = (c: DecoupledIO[UInt], nanosID: Long) => {
+    val FPGA_MASK = 0x1
+    val RUN_ON_ANY_ACCELERATOR_MASK = 0xff
+
+    c.valid.expect(true.B)
+    val picosSubPacket = c.bits.peek().litValue
+    //println(toHexString(picosSubPacket))
+    assert(((picosSubPacket >> 32) & 0x3) == FPGA_MASK)
+    assert(((picosSubPacket >> 40) & 0xff) == RUN_ON_ANY_ACCELERATOR_MASK)
+    assert((picosSubPacket & 0xffffffffL) == nanosID)
+  }
+
+  val setAckSignal = (c: PicosFifoBundle[UInt]) => {
+    c.valid.poke(true.B)
+    c.data.poke(1.U)
+  }
+
+  val unsetAckSignal = (c: PicosFifoBundle[UInt]) => {
+    c.valid.poke(false.B)
+    c.data.poke(0.U)
+  }
+
+  val waitRandomAmountOfCycles = (c: Module) => {
+    val numWaitCycles = r.nextInt(20)
+    for (k <- 0 until numWaitCycles) {
+      c.clock.step()
+    }
+  }
+
+  /*
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -438,60 +517,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
   }
 
-  val placeDepInfo = (c: CoreSpecificSubmissionHandler, pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
-      c.io.depInfo.valid.poke(true.B)
-      c.io.depInfo.bits(0).pointer.poke(pointer0.U)
-      c.io.depInfo.bits(0).kind.poke(kind0.U)
-      c.io.depInfo.bits(1).pointer.poke(pointer1.U)
-      c.io.depInfo.bits(1).kind.poke(kind1.U)
-  }
-
-  val unplaceDepInfo = (c: CoreSpecificSubmissionHandler) => {
-      c.io.depInfo.valid.poke(false.B)
-      c.io.depInfo.bits(0).pointer.poke(0.U)
-      c.io.depInfo.bits(0).kind.poke(0.U)
-      c.io.depInfo.bits(1).pointer.poke(0.U)
-      c.io.depInfo.bits(1).kind.poke(0.U)
-  }
-
-  val placeTaskInfo = (c: CoreSpecificSubmissionHandler, numDeps: Int, nanosID: Long) => {
-      c.io.taskInfo.valid.poke(true.B)
-      c.io.taskInfo.bits.num_deps.poke(numDeps.U)
-      c.io.taskInfo.bits.task_id.poke(nanosID.U)
-  }
-
-  val unplaceTaskInfo = (c: CoreSpecificSubmissionHandler) => {
-      c.io.taskInfo.valid.poke(false.B)
-      c.io.taskInfo.bits.num_deps.poke(0.U)
-      c.io.taskInfo.bits.task_id.poke(0.U)
-  }
-
-// TODO: Apply DRY to several of the following method definitions
-val checkPacket0 = (c: CoreSpecificSubmissionHandler, numDeps: Int, taskNumber: Long) => {
-  c.io.picosSubData.valid.expect(true.B)
-  val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-  //println(toHexString(picosSubPacket))
-  assert(((picosSubPacket >> 16) & 0xf) == numDeps)
-  assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
-}
-
-// TODO: Implement once we start supporting nesting
-val checkPacket1 = (c: CoreSpecificSubmissionHandler, parentID: Long) => {
-  c.io.picosSubData.valid.expect(true.B)
-}
-
-val checkPacket2 = (c: CoreSpecificSubmissionHandler, nanosID: Long) => {
-  val FPGA_MASK = 0x1
-  val RUN_ON_ANY_ACCELERATOR_MASK = 0xff
-
-  c.io.picosSubData.valid.expect(true.B)
-  val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-  //println(toHexString(picosSubPacket))
-  assert(((picosSubPacket >> 32) & 0x3) == FPGA_MASK)
-  assert(((picosSubPacket >> 40) & 0xff) == RUN_ON_ANY_ACCELERATOR_MASK)
-  assert((picosSubPacket & 0xffffffffL) == nanosID)
-}
-
 val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, numDeps: Int, numArgs: Int) => {
   c.io.routingInfoOuter.valid.expect(true.B)
   c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
@@ -601,5 +626,123 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
               waitRandomAmountOfCycles(c)
           }
       }
+  }
+  */
+	behavior of "SubmissionHandler"
+  it should "Process submission sequences coming from different cores in an ack-dependent way" in {
+    test(new SubmissionHandler(numTestedCores)) { c =>
+      val testCoreID = 7
+      var firstSubmission = true
+
+      c.io.enabled.poke(true.B)
+
+      for (i <- 0 until 100) {
+        val testNumArgs = 0
+        val testTaskID = 1332341342L
+        val testTaskNumber = i + 1
+
+        val testNumDeps = r.nextInt(16)
+        val testParentID = r.nextLong() & 0xffffffffL
+        val testNanosID = r.nextLong() & 0xffffffffL
+
+        val INVALID_TYPE = 0
+        val IN_TYPE = 1
+        val OUT_TYPE = 2
+        val INOUT_TYPE = 3
+
+        c.io.picosSubMaster.valid.expect(false.B)
+        placeTaskInfo(c.io.taskInfoVec(testCoreID), testNumDeps, testNanosID)
+
+          c.clock.step()
+          c.clock.step()
+          //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
+
+
+        if (firstSubmission) {
+          // The system has not completed any submission sequence yet,
+          // so there is no need to wait for an acknowledgement
+          c.io.picosSubMaster.valid.expect(true.B)
+          firstSubmission = false
+        } else {
+          waitRandomAmountOfCycles(c)
+          c.io.picosSubMaster.valid.expect(false.B)
+          setAckSignal(c.io.picosAckInterface)
+            c.clock.step()
+          unsetAckSignal(c.io.picosAckInterface)
+            c.clock.step()
+        }
+
+          waitRandomAmountOfCycles(c)
+        //println("Just crossed firstSubmission zone")
+
+        checkPacket0(c.io.picosSubMaster, testNumDeps, testTaskNumber)
+        c.io.picosSubMaster.ready.poke(true.B)
+
+          c.clock.step()
+          //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
+
+        checkPacket1(c.io.picosSubMaster, testParentID)
+
+          c.clock.step()
+          c.io.picosSubMaster.ready.poke(false.B)
+          waitRandomAmountOfCycles(c)
+          c.io.picosSubMaster.ready.poke(true.B)
+          //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
+
+        checkPacket2(c.io.picosSubMaster, testNanosID)
+
+          c.clock.step()
+          c.io.picosSubMaster.ready.poke(false.B)
+          waitRandomAmountOfCycles(c)
+          c.io.picosSubMaster.ready.poke(true.B)
+          //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
+
+        unplaceTaskInfo(c.io.taskInfoVec(testCoreID))
+
+          c.clock.step()
+          c.io.picosSubMaster.ready.poke(false.B)
+          waitRandomAmountOfCycles(c)
+          c.io.picosSubMaster.ready.poke(true.B)
+
+        var j = 0
+        while (j < testNumDeps) {
+          val testDepPointer0 = r.nextLong() & 0xffffffffffffffL
+          val testDepKind0 = r.nextInt(3) + 1
+          val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
+          val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
+
+          //println("Dep #" + j)
+
+          placeDepInfo(c.io.depInfoVec(testCoreID), testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
+
+          c.io.picosSubMaster.valid.expect(true.B)
+          c.io.picosSubMaster.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
+
+            c.clock.step()
+            c.io.picosSubMaster.ready.poke(false.B)
+            waitRandomAmountOfCycles(c)
+            c.io.picosSubMaster.ready.poke(true.B)
+
+          if (testDepKind1 != 0) {
+            c.io.picosSubMaster.valid.expect(true.B)
+            c.io.picosSubMaster.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
+            //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
+
+              c.clock.step()
+              c.io.picosSubMaster.ready.poke(false.B)
+              waitRandomAmountOfCycles(c)
+              c.io.picosSubMaster.ready.poke(true.B)
+            j += 1
+          }
+          j += 1
+
+            unplaceDepInfo(c.io.depInfoVec(testCoreID))
+
+            waitRandomAmountOfCycles(c)
+        }
+        unplaceDepInfo(c.io.depInfoVec(testCoreID))
+        c.io.picosSubMaster.ready.poke(false.B)
+      }
+    }
   }
 }
