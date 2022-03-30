@@ -120,6 +120,7 @@ class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
 
 				val picosSubData							= Decoupled(UInt(64.W))
 				val coreID										= Input(UInt(log2Ceil(nCores).W))
+				val suggestedTaskNumber				= Input(UInt(32.W))
 }
 
 class SubmissionHeaderGenerator(nCores: Int) extends Module {
@@ -161,7 +162,11 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 						// because we need to be able to describe up to 33 packets per sequence
 						io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
-						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
+						when (io.suggestedTaskNumber =/= 0.U) {
+							io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, sixteenZeros))
+						} .otherwise {
+							io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
+						}
 
 						// The following ensures we do not leave this state before
 						// the header inner routing packet is sent to the leaf
@@ -235,6 +240,7 @@ class CoreSpecificSubmissionHandler(nCores: Int, maxSequenceLength: Int = 33) ex
 				headerGenerator.io.coreID := io.coreID
 				headerGenerator.io.argsAndParentInfo := io.argsAndParentInfo
 				headerGenerator.io.taskInfo := io.taskInfo
+				headerGenerator.io.suggestedTaskNumber := io.suggestedTaskNumber
 				io.routingInfoOuter := headerGenerator.io.routingInfoOuter
 
 				dependenceInfoAdapter.io.depInfo := io.depInfo
@@ -265,12 +271,14 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength)).io}
 				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
+				val taskNumberCounter = RegInit(0.U(32.W))
 
 				for (i <- 0 until nCores) {
 					coreSubmissionHandlers(i).taskInfo <> io.taskInfoVec(i)
 					coreSubmissionHandlers(i).argsAndParentInfo <> io.argsAndParentInfoVec(i)
 					coreSubmissionHandlers(i).depInfo <> io.depInfoVec(i)
 					coreSubmissionHandlers(i).coreID := i.U(log2Ceil(nCores).W)
+					coreSubmissionHandlers(i).suggestedTaskNumber := taskNumberCounter
 					masterGuidedArbiter.io.in(i) <> coreSubmissionHandlers(i).picosSubData
 					routingArbiter.io.in(i) <> coreSubmissionHandlers(i).routingInfoOuter
 				}
@@ -284,6 +292,10 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 					awaitingAcknowledgement := !(io.picosAckInterface.valid && (io.picosAckInterface.data === 1.U(2.W)))
 				} .otherwise {
 					awaitingAcknowledgement := masterGuidedArbiter.io.last
+				}
+
+				when (routingArbiter.io.out.fire()) {
+					taskNumberCounter := taskNumberCounter + 1.U
 				}
 
 				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
