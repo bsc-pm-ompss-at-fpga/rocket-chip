@@ -335,28 +335,12 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           val OUT_TYPE = 2
           val INOUT_TYPE = 3
 
-          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
-              c.io.depInfo.valid.poke(true.B)
-              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
-              c.io.depInfo.bits(0).kind.poke(kind0.U)
-              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
-              c.io.depInfo.bits(1).kind.poke(kind1.U)
-          }
-
-          val unplaceDepInfo = () => {
-              c.io.depInfo.valid.poke(false.B)
-              c.io.depInfo.bits(0).pointer.poke(0.U)
-              c.io.depInfo.bits(0).kind.poke(0.U)
-              c.io.depInfo.bits(1).pointer.poke(0.U)
-              c.io.depInfo.bits(1).kind.poke(0.U)
-          }
-
           for (i <- 0 until 100) {
             val testPointer = r.nextLong() & 0xffffffffffffffL
             val testKind = r.nextInt(3) + 1
 
             c.io.picosSubData.ready.poke(true.B)
-            placeDepInfo(testPointer, testKind, 0, INVALID_TYPE)
+            placeDepInfo(c.io.depInfo, testPointer, testKind, 0, INVALID_TYPE)
 
             c.io.picosSubData.valid.expect(true.B)
             c.io.picosSubData.bits.expect((BigInt(testKind) << 58 | BigInt(testPointer)).U(64.W))
@@ -372,22 +356,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           val OUT_TYPE = 2
           val INOUT_TYPE = 3
 
-          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
-              c.io.depInfo.valid.poke(true.B)
-              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
-              c.io.depInfo.bits(0).kind.poke(kind0.U)
-              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
-              c.io.depInfo.bits(1).kind.poke(kind1.U)
-          }
-
-          val unplaceDepInfo = () => {
-              c.io.depInfo.valid.poke(false.B)
-              c.io.depInfo.bits(0).pointer.poke(0.U)
-              c.io.depInfo.bits(0).kind.poke(0.U)
-              c.io.depInfo.bits(1).pointer.poke(0.U)
-              c.io.depInfo.bits(1).kind.poke(0.U)
-          }
-
           for (i <- 0 until 100) {
             val testPointer0 = r.nextLong() & 0xffffffffffffffL
             val testKind0 = r.nextInt(3) + 1
@@ -395,7 +363,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             val testKind1 = r.nextInt(3) + 1
 
             c.io.picosSubData.ready.poke(true.B)
-            placeDepInfo(testPointer0, testKind0, testPointer1, testKind1)
+            placeDepInfo(c.io.depInfo, testPointer0, testKind0, testPointer1, testKind1)
 
             c.io.picosSubData.valid.expect(true.B)
             c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
@@ -417,22 +385,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           val OUT_TYPE = 2
           val INOUT_TYPE = 3
 
-          val placeDepInfo = (pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
-              c.io.depInfo.valid.poke(true.B)
-              c.io.depInfo.bits(0).pointer.poke(pointer0.U)
-              c.io.depInfo.bits(0).kind.poke(kind0.U)
-              c.io.depInfo.bits(1).pointer.poke(pointer1.U)
-              c.io.depInfo.bits(1).kind.poke(kind1.U)
-          }
-
-          val unplaceDepInfo = () => {
-              c.io.depInfo.valid.poke(false.B)
-              c.io.depInfo.bits(0).pointer.poke(0.U)
-              c.io.depInfo.bits(0).kind.poke(0.U)
-              c.io.depInfo.bits(1).pointer.poke(0.U)
-              c.io.depInfo.bits(1).kind.poke(0.U)
-          }
-
           for (i <- 0 until 100) {
             val testPointer0 = r.nextLong() & 0xffffffffffffffL
             val testKind0 = r.nextInt(3) + 1
@@ -440,7 +392,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             val testKind1 = r.nextInt(4)
 
             c.io.picosSubData.ready.poke(true.B)
-            placeDepInfo(testPointer0, testKind0, testPointer1, testKind1)
+            placeDepInfo(c.io.depInfo, testPointer0, testKind0, testPointer1, testKind1)
 
             c.io.picosSubData.valid.expect(true.B)
             c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
