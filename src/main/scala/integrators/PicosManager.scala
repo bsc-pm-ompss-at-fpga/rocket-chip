@@ -13,7 +13,7 @@ import freechips.rocketchip.tile.{BlankConfig}
 
 class ReadyPacket extends Bundle {
 				val nanosID                     = UInt(32.W)
-				val picosID                     = UInt(32.W)
+				val picosID                     = UInt(64.W)
 }
 
 object ReadyPacket {
@@ -33,10 +33,17 @@ class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				override def cloneType = new PicosFifoBundle(typ.cloneType).asInstanceOf[this.type]
 }
 
+class PicosRawReadyBundle extends Bundle {
+				val payload                     = UInt(64.W)
+				val tid                         = UInt(32.W)
+
+				override def cloneType = new PicosRawReadyBundle().asInstanceOf[this.type]
+}
+
 class ReadyTaskIO(nCores: Int) extends Bundle {
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
-				val picosReadyInterface     = Flipped(new PicosFifoBundle(UInt(64.W)))
+				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
 }
 
 class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
@@ -341,12 +348,14 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 
 	val picosReadyInterfaceNotEmpty = io.picosReadyInterface.valid
 	val picosReadyInterfacePop = io.picosReadyInterface.empty
-	val picosReadyInterfaceBits = io.picosReadyInterface.data
+	val picosReadyInterfaceBits = io.picosReadyInterface.data.payload
+	val picosReadyInterfaceTID = io.picosReadyInterface.data.tid
 
 	val readyPacket = Wire(new ReadyPacket)
 
 	val num_args = RegEnable(picosReadyInterfaceBits(15, 8), wf_counter === 0.U)
-	val wf_picosID = RegEnable(picosReadyInterfaceBits(31, 0), wf_counter === 1.U)
+
+	val wf_picosID = RegEnable(Cat(picosReadyInterfaceTID, picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
 	val wf_parentID = RegEnable(picosReadyInterfaceBits, wf_counter === 2.U)
 
 	val canProceed = picosReadyInterfaceNotEmpty && (wf_counter < 3.U || roccReadyQueue.io.enq.fire())
