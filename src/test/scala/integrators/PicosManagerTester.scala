@@ -23,6 +23,7 @@ import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
   */
 class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   val numTestedCores = 8
+  val maxTID = 255
 
 	val r = new scala.util.Random()
 	r.setSeed(1000)
@@ -101,6 +102,15 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
+  val setTID = (c: PicosFifoBundle[PicosRawReadyBundle], tID: Int) => {
+    c.valid.poke(true.B)
+    c.data.tid.poke(tID.U)
+  }
+
+  val unsetTID = (c: PicosFifoBundle[PicosRawReadyBundle], tID: Int) => {
+    c.valid.poke(false.B)
+  }
+
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -125,14 +135,14 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         do {
           tryAgain = false
           c.io.picosReadyInterface.valid.poke(true.B)
-          c.io.picosReadyInterface.data.poke(testPacket.U)
+          c.io.picosReadyInterface.data.payload.poke(testPacket.U)
           if (c.io.picosReadyInterface.empty.peek().litToBoolean) {
           } else {
             tryAgain = true
           }
           c.clock.step()
           c.io.picosReadyInterface.valid.poke(false.B)
-          c.io.picosReadyInterface.data.poke(0.U)
+          c.io.picosReadyInterface.data.payload.poke(0.U)
         } while (tryAgain)
       }
 
@@ -162,17 +172,18 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         var picosID: BigInt = 0
         var parentID: BigInt = 0
         var nanosID: BigInt = 0
+        var tID: BigInt = 0
 
         override def toString() : String = {
-          val baseList = List(numArgs, picosID, parentID, nanosID)
+          val baseList = List(numArgs, picosID, parentID, nanosID, tID)
           val hexList = baseList.map(toHexString(_))
           val innerString = hexList.foldRight("")(_ + ", " + _).dropRight(2)
-          return "(numArgs, picosID, parentID, nanosID) = (" + innerString + ")"
+          return "(numArgs, picosID, parentID, nanosID, tID) = (" + innerString + ")"
         }
 
         override def equals(other: Any): Boolean = {
           other match {
-            case other: ReadyTaskInfo => picosID == other.picosID && nanosID == other.nanosID
+            case other: ReadyTaskInfo => picosID == other.picosID && nanosID == other.nanosID && tID == other.tID
             case _ => false
           }
         }
@@ -181,10 +192,10 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       val interpretInput = (input: ListBuffer[BigInt]) => {
         assert(input.size == 4)
         var readyTask = new ReadyTaskInfo
-        readyTask.numArgs = input(0) & 0xff00
-        readyTask.picosID = input(1) & 0xffffffffL
+        readyTask.numArgs  = input(0) & 0xff00
+        readyTask.picosID  = input(1) & 0xffffffffL
         readyTask.parentID = input(2)
-        readyTask.nanosID = input(3) & 0xffffffffL
+        readyTask.nanosID  = input(3) & 0xffffffffL
 
         readyTask
       }
@@ -197,8 +208,13 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
         var readyTask = new ReadyTaskInfo
 
+        val rawPicosID =  c.io.readyQInterface(coreID).bits.picosID.peek().litValue
+        val cleanPicosID = rawPicosID & 0xffffffffL
+        val tID = rawPicosID >> 32
+
         readyTask.nanosID = c.io.readyQInterface(coreID).bits.nanosID.peek().litValue
-        readyTask.picosID = c.io.readyQInterface(coreID).bits.picosID.peek().litValue
+        readyTask.picosID = cleanPicosID
+        readyTask.tID = tID
 
         c.clock.step()
         c.io.readyQInterface(coreID).ready.poke(false.B)
@@ -206,25 +222,26 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         readyTask
       }
 
-      it should "work"
-
       val numReadyTaskFetches = 10
       for (i <- 0 until numReadyTaskFetches) {
         val randomInputSequence = generateRandomInput()
-        val interpretedInput = interpretInput(randomInputSequence)
         val targetCore = i % numTestedCores
+        val interpretedInput = interpretInput(randomInputSequence)
+
+        val testedTID = r.nextInt(maxTID + 1)
+        interpretedInput.tID = testedTID
 
         //println(interpretedInput)
+        setTID(c.io.picosReadyInterface, testedTID)
         driveInputSequence(randomInputSequence)
         
         sendRoutingPacket(targetCore)
         val answer = fetchAnswerForCore(targetCore)
         //println(answer)
         assert(interpretedInput == answer)
-      }
+      } 
     }
   }
-
 
 	behavior of "SubmissionHeaderGenerator"
   it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
