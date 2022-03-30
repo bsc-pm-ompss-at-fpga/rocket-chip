@@ -31,12 +31,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     f"${num}%X"
   }
 
-  //val placeTaskInfo = (c: CoreSpecificSubmissionHandler, numDeps: Int, nanosID: Long) => {
-  //    c.io.taskInfo.valid.poke(true.B)
-  //    c.io.taskInfo.bits.num_deps.poke(numDeps.U)
-  //    c.io.taskInfo.bits.task_id.poke(nanosID.U)
-  //}
-
   val placeTaskInfo = (c: DecoupledIO[TaskInfo], numDeps: Int, nanosID: Long) => {
       c.valid.poke(true.B)
       c.bits.num_deps.poke(numDeps.U)
