@@ -235,58 +235,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 	behavior of "SubmissionHeaderGenerator"
   it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
     test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
-      val placeTaskInfo = (numDeps: Int, taskID: Long) => {
-          c.io.taskInfo.valid.poke(true.B)
-          c.io.taskInfo.bits.num_deps.poke(numDeps.U)
-          c.io.taskInfo.bits.task_id.poke(taskID.U)
-      }
-
-      val unplaceTaskInfo = () => {
-          c.io.taskInfo.valid.poke(false.B)
-          c.io.taskInfo.bits.num_deps.poke(0.U)
-          c.io.taskInfo.bits.task_id.poke(0.U)
-      }
-
-      val sendTaskInfo = (numDeps: Int, taskID: Int) => {
-        var tryAgain = false
-
-        do {
-          tryAgain = false
-          placeTaskInfo(numDeps, taskID)
-          if (c.io.taskInfo.ready.peek().litToBoolean) {
-          } else {
-            tryAgain = true
-          }
-          c.clock.step()
-          unplaceTaskInfo()
-        } while (tryAgain)
-      }
-
-      val checkPacket0 = (numDeps: Int, taskNumber: Long) => {
-        c.io.picosSubData.valid.expect(true.B)
-        val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-        //println(toHexString(picosSubPacket))
-        assert(((picosSubPacket >> 16) & 0xf) == numDeps)
-        assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
-      }
-
-      // TODO: Implement once we start supporting nesting
-      val checkPacket1 = (parentID: Long) => {
-        c.io.picosSubData.valid.expect(true.B)
-      }
-
-      val checkPacket2 = (nanosID: Long) => {
-        val FPGA_MASK = 0x1
-        val RUN_ON_ANY_ACCELERATOR_MASK = 0xff
-
-        c.io.picosSubData.valid.expect(true.B)
-        val picosSubPacket = c.io.picosSubData.bits.peek().litValue
-        //println(toHexString(picosSubPacket))
-        assert(((picosSubPacket >> 32) & 0x3) == FPGA_MASK)
-        assert(((picosSubPacket >> 40) & 0xff) == RUN_ON_ANY_ACCELERATOR_MASK)
-        assert((picosSubPacket & 0xffffffffL) == nanosID)
-      }
-
       val checkHeaderInnerRoutingPacket = () => {
         c.io.routingInfo.valid.expect(true.B)
         c.io.routingInfo.bits.arbID.expect(0.U)
@@ -317,7 +265,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         val testedNanosID = r.nextLong() & 0xffffffffL
         val testedNumArgs = 0
 
-        placeTaskInfo(testedNumDeps, testedNanosID)
+        placeTaskInfo(c.io.taskInfo, testedNumDeps, testedNanosID)
         c.io.picosSubData.valid.expect(false.B)
 
           waitRandomAmountOfCycles(c)
@@ -337,7 +285,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.picosSubData.valid.expect(true.B)
         c.io.picosSubData.ready.poke(true.B)
 
-        checkPacket0(testedNumDeps, testedTaskNumber)
+        checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
 
           c.clock.step()
 
@@ -351,7 +299,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.ready.poke(true.B)
 
-        checkPacket1(testedParentID)
+        checkPacket1(c.io.picosSubData, testedParentID)
         checkPayloadInnerRoutingPacket(testedNumDeps, testedNumArgs)
 
           c.clock.step()
@@ -366,11 +314,11 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.ready.poke(true.B)
 
-        checkPacket2(testedNanosID)
+        checkPacket2(c.io.picosSubData, testedNanosID)
 
           c.clock.step()
 
-        unplaceTaskInfo()
+        unplaceTaskInfo(c.io.taskInfo)
         c.io.picosSubData.ready.poke(false.B)
         c.io.routingInfo.ready.poke(false.B)
         c.io.routingInfoOuter.ready.poke(false.B)
