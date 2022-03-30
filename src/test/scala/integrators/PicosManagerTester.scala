@@ -631,7 +631,6 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
     test(new SubmissionHandler(numTestedCores)) { c =>
-      val testCoreID = 7
       var firstSubmission = true
 
       c.io.enabled.poke(true.B)
@@ -642,6 +641,7 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
         val testTaskNumber = i + 1
 
         val testNumDeps = r.nextInt(16)
+        val testCoreID = r.nextInt(numTestedCores)
         val testParentID = r.nextLong() & 0xffffffffL
         val testNanosID = r.nextLong() & 0xffffffffL
 
@@ -649,6 +649,8 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
         val IN_TYPE = 1
         val OUT_TYPE = 2
         val INOUT_TYPE = 3
+
+        //println(s"Test #$i")
 
         c.io.picosSubMaster.valid.expect(false.B)
         placeTaskInfo(c.io.taskInfoVec(testCoreID), testNumDeps, testNanosID)
