@@ -107,7 +107,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  /*
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -306,13 +305,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
       }
 
-      val waitRandomAmountOfCycles = () => {
-        val numWaitCycles = r.nextInt(20)
-        for (k <- 0 until numWaitCycles) {
-          c.clock.step()
-        }
-      }
-
       val testedCoreID = (numTestedCores + 2) % numTestedCores 
       
       c.io.coreID.poke(testedCoreID.U)
@@ -328,18 +320,18 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         placeTaskInfo(testedNumDeps, testedNanosID)
         c.io.picosSubData.valid.expect(false.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
 
         checkHeaderInnerRoutingPacket()
         checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
 
         c.io.routingInfo.ready.poke(true.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
 
         c.io.picosSubData.valid.expect(false.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
 
         c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.valid.expect(true.B)
@@ -353,7 +345,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfoOuter.ready.poke(false.B)
         c.io.picosSubData.ready.poke(false.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
 
         c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
@@ -368,7 +360,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfoOuter.ready.poke(false.B)
         c.io.picosSubData.ready.poke(false.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
 
         c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
@@ -383,7 +375,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfo.ready.poke(false.B)
         c.io.routingInfoOuter.ready.poke(false.B)
 
-          waitRandomAmountOfCycles()
+          waitRandomAmountOfCycles(c)
       }
     }
   }
@@ -523,13 +515,6 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
   c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
 }
 
-val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
-  val numWaitCycles = r.nextInt(20)
-  for (k <- 0 until numWaitCycles) {
-    c.clock.step()
-  }
-}
-
 	behavior of "CoreSpecificSubmissionHandler"
   it should "produce a valid header sequence" in {
       test(new CoreSpecificSubmissionHandler(numTestedCores)) { c =>
@@ -555,7 +540,7 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
             c.io.routingInfoOuter.ready.poke(true.B)
             c.io.picosSubData.ready.poke(true.B)
 
-            placeTaskInfo(c, testNumDeps, testNanosID)
+            placeTaskInfo(c.io.taskInfo, testNumDeps, testNanosID)
             c.io.routingInfoOuter.valid.expect(true.B)
             
             checkOuterRoutingPacket(c, testCoreID, testNumDeps, testNumArgs)
@@ -568,22 +553,22 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
               c.clock.step()
               c.clock.step()
 
-            checkPacket0(c, testNumDeps, testTaskNumber)
+            checkPacket0(c.io.picosSubData, testNumDeps, testTaskNumber)
 
               c.clock.step()
 
             // TODO: For the following to work, we'll need to allow
             //       CoreSpecificSubmissionHandler to buffer at least
             //       one routing packet for the leaf GuidedArbiter
-            checkPacket1(c, testParentID)
+            checkPacket1(c.io.picosSubData, testParentID)
 
               c.clock.step()
 
-            checkPacket2(c, testNanosID)
+            checkPacket2(c.io.picosSubData, testNanosID)
 
               c.clock.step()
 
-            unplaceTaskInfo(c)
+            unplaceTaskInfo(c.io.taskInfo)
               // One extra step is needed because the routing packet
               // for the payload section takes one cycle to be fetched
               c.clock.step()
@@ -599,7 +584,7 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
 
               //println("Dep #" + j)
 
-              placeDepInfo(c, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
+              placeDepInfo(c.io.depInfo, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
 
               c.io.picosSubData.valid.expect(true.B)
               c.io.picosSubData.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
@@ -615,11 +600,11 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
               }
               j += 1
 
-                unplaceDepInfo(c)
+                unplaceDepInfo(c.io.depInfo)
 
                 waitRandomAmountOfCycles(c)
             }
-            unplaceDepInfo(c)
+            unplaceDepInfo(c.io.depInfo)
             c.io.routingInfoOuter.ready.poke(false.B)
             c.io.picosSubData.ready.poke(false.B)
 
@@ -627,7 +612,6 @@ val waitRandomAmountOfCycles = (c: CoreSpecificSubmissionHandler) => {
           }
       }
   }
-  */
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
     test(new SubmissionHandler(numTestedCores)) { c =>
