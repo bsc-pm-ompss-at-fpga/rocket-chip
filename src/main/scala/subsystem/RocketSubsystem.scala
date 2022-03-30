@@ -68,7 +68,7 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
 
   val picosIO = IO(new Bundle {
     val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
-    val picosReadyInterface     = Flipped(new PicosFifoBundle(UInt(64.W)))
+    val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
     val picosSubInterface       = new PicosFifoBundle(UInt(64.W)) with HasDest
     val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
     val pmException             = Output(UInt(4.W))

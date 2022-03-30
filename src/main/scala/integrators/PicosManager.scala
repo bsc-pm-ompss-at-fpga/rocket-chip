@@ -62,7 +62,7 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
 
 				val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
-				val picosReadyInterface     = Flipped(new PicosFifoBundle(typ.cloneType))
+				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
 				// TODO: Remove the dontTouch
 				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType) with HasDest)
 				val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
@@ -354,7 +354,6 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 	val readyPacket = Wire(new ReadyPacket)
 
 	val num_args = RegEnable(picosReadyInterfaceBits(15, 8), wf_counter === 0.U)
-
 	val wf_picosID = RegEnable(Cat(picosReadyInterfaceTID, picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
 	val wf_parentID = RegEnable(picosReadyInterfaceBits, wf_counter === 2.U)
 
@@ -399,6 +398,9 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	io.picosFinishedInterface.data := delayerAdapter.io.out.bits
 	io.picosFinishedInterface.valid := delayerAdapter.io.out.valid
 	delayerAdapter.io.out.ready := io.picosFinishedInterface.empty
+
+	val readyPacketExtractor = Module(new ReadyPacketExtractor(nCores))
+	readyPacketExtractor.io.picosReadyInterface := io.picosReadyInterface
 
 	// Implement submission interactions
 	// FIXME: Re-activate the following code with adaptations to
