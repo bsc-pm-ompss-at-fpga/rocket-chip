@@ -67,7 +67,9 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   printf(s"[RocketSubsystemModuleImp]: The current system has ${outer.nTiles} tiles.\n")
 
   val picosIO = IO(new Bundle {
-    val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
+    // TODO: REMOVE THIS
+    //val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
+    val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
     val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
     val picosSubInterface       = new PicosFifoBundle(UInt(64.W)) with HasDest
     val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
@@ -87,11 +89,6 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
   picosIO.pmException := outer.tile_prci_domains(0).module.delegate.pmException
 
   outer.tile_prci_domains.zipWithIndex.foreach{ case (prci_tile, i) =>
-    // TODO: Clear these deprecated signals
-    // pmanager.io.subQInterface(i) <> prci_tile.module.delegate.subQInterface
-    // pmanager.io.subRequest(i) <> prci_tile.module.delegate.subRequest
-    // pmanager.io.tag(i) <> prci_tile.module.delegate.tag
-    
     pmanager.io.retInterface(i) <> prci_tile.module.delegate.retInterface
     pmanager.io.readyRequestInterface(i) <> prci_tile.module.delegate.readyRequestInterface
     prci_tile.module.delegate.readyQInterface <> pmanager.io.readyQInterface(i)

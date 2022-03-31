@@ -60,7 +60,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       c.bits(1).kind.poke(0.U)
   }
 
-  val checkPacket0 = (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long) => {
+  val checkPacket0 = (c: DecoupledIO[PicosRawSubmissionBundle], numDeps: Int, taskNumber: Long) => {
     c.valid.expect(true.B)
     val picosSubPacket = c.bits.peek().litValue
     //println(toHexString(picosSubPacket))
@@ -69,11 +69,11 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   // TODO: Implement once we start supporting nesting
-  val checkPacket1 = (c: DecoupledIO[UInt], parentID: Long) => {
+  val checkPacket1 = (c: DecoupledIO[PicosRawSubmissionBundle], parentID: Long) => {
     c.valid.expect(true.B)
   }
 
-  val checkPacket2 = (c: DecoupledIO[UInt], nanosID: Long) => {
+  val checkPacket2 = (c: DecoupledIO[PicosRawSubmissionBundle], nanosID: Long) => {
     val FPGA_MASK = 0x1
     val RUN_ON_ANY_ACCELERATOR_MASK = 0xff
 
@@ -245,7 +245,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
 	behavior of "SubmissionHeaderGenerator"
   it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
-    test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
+    test(new SubmissionHeaderGenerator(numTestedCores, new PicosRawSubmissionBundle)) { c =>
       val checkHeaderInnerRoutingPacket = () => {
         c.io.routingInfo.valid.expect(true.B)
         c.io.routingInfo.bits.arbID.expect(0.U)
@@ -354,7 +354,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             placeDepInfo(c.io.depInfo, testPointer, testKind, 0, INVALID_TYPE)
 
             c.io.picosSubData.valid.expect(true.B)
-            c.io.picosSubData.bits.expect((BigInt(testKind) << 58 | BigInt(testPointer)).U(64.W))
+            c.io.picosSubData.bits.payload.expect((BigInt(testKind) << 58 | BigInt(testPointer)).U(64.W))
               c.clock.step()
           }
       }
@@ -377,12 +377,12 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             placeDepInfo(c.io.depInfo, testPointer0, testKind0, testPointer1, testKind1)
 
             c.io.picosSubData.valid.expect(true.B)
-            c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
+            c.io.picosSubData.bits.payload.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
 
               c.clock.step()
 
             c.io.picosSubData.valid.expect(true.B)
-            c.io.picosSubData.bits.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
+            c.io.picosSubData.bits.payload.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
 
               c.clock.step()
           }
@@ -406,13 +406,13 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             placeDepInfo(c.io.depInfo, testPointer0, testKind0, testPointer1, testKind1)
 
             c.io.picosSubData.valid.expect(true.B)
-            c.io.picosSubData.bits.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
+            c.io.picosSubData.bits.payload.expect((BigInt(testKind0) << 58 | BigInt(testPointer0)).U(64.W))
 
               c.clock.step()
 
             if (testKind1 != 0) {
               c.io.picosSubData.valid.expect(true.B)
-              c.io.picosSubData.bits.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
+              c.io.picosSubData.bits.payload.expect((BigInt(testKind1) << 58 | BigInt(testPointer1)).U(64.W))
 
                 c.clock.step()
             }
@@ -420,7 +420,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
   }
 
-val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, numDeps: Int, numArgs: Int) => {
+val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[PicosRawSubmissionBundle], coreID: Int, numDeps: Int, numArgs: Int) => {
   c.io.routingInfoOuter.valid.expect(true.B)
   c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
   c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
@@ -428,7 +428,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
 
 	behavior of "CoreSpecificSubmissionHandler"
   it should "produce a valid header sequence" in {
-      test(new CoreSpecificSubmissionHandler(numTestedCores)) { c =>
+      test(new CoreSpecificSubmissionHandler(numTestedCores, 33, new PicosRawSubmissionBundle)) { c =>
           val testCoreID = 7
 
           for (i <- 0 until 100) {
@@ -498,13 +498,13 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
               placeDepInfo(c.io.depInfo, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
 
               c.io.picosSubData.valid.expect(true.B)
-              c.io.picosSubData.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
+              c.io.picosSubData.bits.payload.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
 
                 c.clock.step()
 
               if (testDepKind1 != 0) {
                 c.io.picosSubData.valid.expect(true.B)
-                c.io.picosSubData.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
+                c.io.picosSubData.bits.payload.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
 
                   c.clock.step()
                 j += 1
@@ -525,7 +525,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
   }
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
-    test(new SubmissionHandler(numTestedCores)) { c =>
+    test(new SubmissionHandler(numTestedCores, new PicosRawSubmissionBundle, 33)) { c =>
       var firstSubmission = true
 
       c.io.enabled.poke(true.B)
@@ -613,7 +613,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
           placeDepInfo(c.io.depInfoVec(testCoreID), testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
 
           c.io.picosSubMaster.valid.expect(true.B)
-          c.io.picosSubMaster.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
+          c.io.picosSubMaster.bits.payload.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
 
             c.clock.step()
             c.io.picosSubMaster.ready.poke(false.B)
@@ -622,7 +622,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler, coreID: Int, nu
 
           if (testDepKind1 != 0) {
             c.io.picosSubMaster.valid.expect(true.B)
-            c.io.picosSubMaster.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
+            c.io.picosSubMaster.bits.payload.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
             //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
               c.clock.step()

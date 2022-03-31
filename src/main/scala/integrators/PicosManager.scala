@@ -30,7 +30,16 @@ class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val empty                       = Bool().asInput
 				val last												= Bool().asOutput
 
+				def fire() = empty && valid
+
 				override def cloneType = new PicosFifoBundle(typ.cloneType).asInstanceOf[this.type]
+}
+
+class PicosRawRetirementBundle extends Bundle {
+				val payload                     = UInt(64.W)
+				val tid                         = UInt(32.W)
+
+				override def cloneType = new PicosRawRetirementBundle().asInstanceOf[this.type]
 }
 
 class PicosRawReadyBundle extends Bundle {
@@ -38,6 +47,12 @@ class PicosRawReadyBundle extends Bundle {
 				val tid                         = UInt(32.W)
 
 				override def cloneType = new PicosRawReadyBundle().asInstanceOf[this.type]
+}
+
+class PicosRawSubmissionBundle extends Bundle with HasDest {
+				val payload                     = UInt(64.W)
+
+				override def cloneType = new PicosRawSubmissionBundle().asInstanceOf[this.type]
 }
 
 class ReadyTaskIO(nCores: Int) extends Bundle {
@@ -56,12 +71,14 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
 
-				//TODO: Remove the dontTouch to make sure that these signals are being used
+				// TODO: Remove the dontTouch to make sure that these signals are being used
 				val argsAndParentInfoVec      = dontTouch( Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo))) )
 				val taskInfoVec            		= dontTouch( Flipped(Vec(nCores, Decoupled(new TaskInfo))) )
 				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
 
-				val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
+				// TODO: REMOVE THIS
+				//val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
+				val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
 				// TODO: Remove the dontTouch
 				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType) with HasDest)
@@ -76,7 +93,7 @@ trait HasDepInfo extends Bundle{
 
 class DependenceInfoAdapterIO extends Bundle {
 				val depInfo   							  = Flipped(Decoupled(Vec(2, new DepInfo)))
-				val picosSubData							= Decoupled(UInt(64.W))
+				val picosSubData							= Decoupled(new PicosRawSubmissionBundle)
 }
 
 class DependenceInfoAdapter extends Module {
@@ -96,11 +113,11 @@ class DependenceInfoAdapter extends Module {
 				//             be depInfo(0), not depInfo(1)
 				when (io.depInfo.bits(1).kind === VOID_TYPE) {
 					io.depInfo.ready := io.picosSubData.ready
-					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(0).kind, twoZeros, io.depInfo.bits(0).pointer))
+					io.picosSubData.bits.payload := Cat(Seq(io.depInfo.bits(0).kind, twoZeros, io.depInfo.bits(0).pointer))
 					io.picosSubData.valid := io.depInfo.valid
 				} .otherwise {
 					io.depInfo.ready := io.picosSubData.ready && (activeDep === 1.U)
-					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(activeDep).kind, twoZeros, io.depInfo.bits(activeDep).pointer))
+					io.picosSubData.bits.payload := Cat(Seq(io.depInfo.bits(activeDep).kind, twoZeros, io.depInfo.bits(activeDep).pointer))
 					io.picosSubData.valid := io.depInfo.valid
 					when (io.picosSubData.fire()) {
 						activeDep := activeDep + 1.U
@@ -116,7 +133,7 @@ trait HasInnerRoutingInfo extends Bundle {
 				val routingInfo								= Decoupled((new RoutingInfo(2, 3 + 15 + 15)))
 }
 
-class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
+class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle {
 				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
 				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
 
@@ -125,13 +142,13 @@ class SubmissionHeaderGeneratorIO(nCores: Int) extends Bundle {
 				// submission sequences out of elementary data
 				val routingInfoOuter					= Decoupled((new RoutingInfo(nCores, 3 + 15 + 15)))
 
-				val picosSubData							= Decoupled(UInt(64.W))
+				val picosSubData							= Decoupled(typ.cloneType)
 				val coreID										= Input(UInt(log2Ceil(nCores).W))
 				val suggestedTaskNumber				= Input(UInt(32.W))
 }
 
-class SubmissionHeaderGenerator(nCores: Int) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasInnerRoutingInfo)
+class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Module {
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, new PicosRawSubmissionBundle) with HasInnerRoutingInfo with HasDest)
 				val cycleLength = 3
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
@@ -170,9 +187,9 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 						io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
 						when (io.suggestedTaskNumber =/= 0.U) {
-							io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, sixteenZeros))
+							io.picosSubData.bits.payload := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, sixteenZeros))
 						} .otherwise {
-							io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
+							io.picosSubData.bits.payload := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
 						}
 
 						// The following ensures we do not leave this state before
@@ -190,7 +207,7 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 						}
 					}
 					is (1.U) {
-						io.picosSubData.bits := 0.U
+						io.picosSubData.bits.payload := 0.U
 
 						io.routingInfo.valid := io.taskInfo.valid && !payloadInnerRoutingPacketWasSent
 						io.routingInfo.bits.arbID := 1.U
@@ -207,7 +224,7 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 						}
 					}
 					is (2.U) {
-						io.picosSubData.bits := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
+						io.picosSubData.bits.payload := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
 						io.picosSubData.valid := io.taskInfo.valid
 
 						// The following will ensure data at taskInfo is consumed 
@@ -232,15 +249,14 @@ class SubmissionHeaderGenerator(nCores: Int) extends Module {
 				}
 }
 
-class CoreSpecificSubmissionHandler(nCores: Int, maxSequenceLength: Int = 33) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores) with HasDepInfo)
+class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: Int = 33, typ: T = UInt(64.W)) extends Module {
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ.cloneType) with HasDepInfo with HasDest)
 
-				val picosPacketType = UInt(64.W)
 				val downtimeBetweenSubmissions = 0
 
 				val headerGenerator = Module(new SubmissionHeaderGenerator(nCores))
 				val dependenceInfoAdapter = Module(new DependenceInfoAdapter)
-				val leafGuidedArbiter = Module(new GuidedArbiter(picosPacketType, 2, maxSequenceLength, downtimeBetweenSubmissions))
+				val leafGuidedArbiter = Module(new GuidedArbiter(typ.cloneType, 2, maxSequenceLength, downtimeBetweenSubmissions))
 
 				val leafRoutingPacketsQueue = Module(new Queue(new RoutingInfo(2, 3 + 15 + 15), 2))
 
@@ -263,19 +279,21 @@ class CoreSpecificSubmissionHandler(nCores: Int, maxSequenceLength: Int = 33) ex
 				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
+class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle {
+				val argsAndParentInfoVec  = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
+				val taskInfoVec 		      = Flipped(Vec(nCores, Decoupled(new TaskInfo)))
+				val depInfoVec  				  = Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo))))
+				val picosAckInterface 		= Flipped(new PicosFifoBundle(UInt(2.W)))
+
+				val picosSubMaster        = Decoupled(typ.cloneType)
+				val numStartedSubmissions = UInt(64.W).asOutput
+				val enabled               = Bool().asInput
+}
+
 class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequenceLength: Int = 33, routingQDepth: Int = 0, numDownCycles: Int = 0) extends Module {
-				val io = IO(new Bundle {
-								val argsAndParentInfoVec  = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
-								val taskInfoVec 		      = Flipped(Vec(nCores, Decoupled(new TaskInfo)))
-								val depInfoVec  				  = Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo))))
-								val picosAckInterface 		= Flipped(new PicosFifoBundle(UInt(2.W)))
+				val io = IO(new SubmissionHandlerIO(nCores, typ) with HasDest)
 
-								val picosSubMaster        = Decoupled(typ.cloneType)
-								val numStartedSubmissions = UInt(64.W).asOutput
-								val enabled               = Bool().asInput
-				})
-
-				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength)).io}
+				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength, typ)).io}
 				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 				val taskNumberCounter = RegInit(0.U(32.W))
@@ -376,7 +394,7 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 	}
 }
 
-class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
+class OldCoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
 	val io = IO(new RealManagerIO(nCores))
 	val ret_arbiter = Module(new RRArbiter(UInt(64.W), nCores))
 
@@ -395,7 +413,8 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	retQ.io.enq <> ret_arbiter.io.out
 	delayerAdapter.io.in <> retQ.io.deq
 
-	io.picosFinishedInterface.data := delayerAdapter.io.out.bits
+	//TODO: LET THIS GET TID INFORMATION FROM THE INNER ARBITER
+	//io.picosFinishedInterface.data := delayerAdapter.io.out.bits
 	io.picosFinishedInterface.valid := delayerAdapter.io.out.valid
 	delayerAdapter.io.out.ready := io.picosFinishedInterface.empty
 
@@ -426,4 +445,27 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	//submissionHandler.io.enabled := numInflightTasks <= 250.U(64.W)
 	submissionHandler.io.enabled := true.B
 	*/
+}
+
+class RetirementHandler (nCores: Int) extends Module {
+	// TODO: REPLACE THIS WITH ACTUAL INTERFACE
+	val io = IO(new Bundle{
+		val derp = Output(UInt(64.W))
+	})
+}
+
+class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
+	val io = IO(new RealManagerIO(nCores) with HasDest)
+
+	val workFetchController = Module(new ReadyPacketExtractor(nCores))
+	val submissionController = Module(new SubmissionHandler(nCores))
+	val retirementController = Module(new RetirementHandler(nCores))
+
+	workFetchController.io.picosReadyInterface <> io.picosReadyInterface
+	for (i <- 0 until nCores) {
+		workFetchController.io.readyRequestInterface(i) <> io.readyRequestInterface(i)
+		io.readyQInterface(i) <> workFetchController.io.readyQInterface(i)
+	}
+
+	//io.picosSubInterface <> submissionController.io.picosSubMaster
 }
