@@ -114,6 +114,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
     val prefixValue = 3
     val suffixValue = 0
     val numTestLoops = 100
+    var triggerPacket = BigInt(0L)
 
     test(new RRArbiterWithPrefixAndSuffix(inputType, numTestedCores, sequenceLength, prefixValue, suffixValue)) { c =>
       val generateInputMap = () => {                                                                                        
@@ -159,16 +160,30 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         val numElements = inputMap.size
         driveInputMap(inputMap)
         for (i <- 0 until numElements) {
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: Iteration #$i")
+          c.io.arbiterMonitor.valid.expect(true.B)
+          triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          c.io.triggerContent.expect(triggerPacket.U)
+
           checkWhetherOutputPacketIsAvailable(prefixValue, true)
           c.io.out.ready.poke(true.B)
           c.io.out.valid.expect(true.B)
 
           val fetchedValue = c.io.out.bits.peek().litValue.toInt
 
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          c.io.triggerContent.expect(triggerPacket.U)
+
           assert(inputMap.contains(fetchedValue))
           inputMap.remove(fetchedValue)
-          c.clock.step()
+            c.clock.step()
           c.io.out.ready.poke(false.B)
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          c.io.triggerContent.expect(triggerPacket.U)
+
           checkWhetherOutputPacketIsAvailable(suffixValue, true)
           driveInputMap(inputMap)
         }
@@ -176,7 +191,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
 
         c.io.out.ready.poke(true.B)
         c.io.out.valid.expect(false.B)
-        c.clock.step()
+          c.clock.step()
         c.io.out.ready.poke(false.B)
       }
 

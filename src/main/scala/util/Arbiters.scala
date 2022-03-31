@@ -461,12 +461,14 @@ class ArbitraryPrefixer[T <: Data](typ: T, burstSizeWithPrefix: Int, prefixValue
     val in = Decoupled(typ.cloneType).flip
     val out = Decoupled(typ.cloneType)
     val enablePrefixing = Input(Wire(Bool()))
+    val prefixing = Output(Wire(Bool()))
   })
 
   val counter = RegInit(0.U(log2Ceil(burstSizeWithPrefix).W))
 
   val prefixNow = counter === 0.U
   val wrapCounter = counter === (burstSizeWithPrefix - 1).U
+  io.prefixing := prefixNow
 
   when (prefixNow) {
     io.in.ready := false.B
@@ -491,6 +493,7 @@ class ArbitraryPrefixerAndSuffixer[T <: Data](typ: T, burstSizeWithPrefixAndSuff
     val out = Decoupled(typ.cloneType)
     val enablePrefixing = Input(Wire(Bool()))
     val suffixing = Output(Wire(Bool()))
+    val prefixing = Output(Wire(Bool()))
   })
 
   val prefixer = Module(new ArbitraryPrefixer(typ, burstSizeWithPrefixAndSuffix - 1, prefixValue))
@@ -501,6 +504,7 @@ class ArbitraryPrefixerAndSuffixer[T <: Data](typ: T, burstSizeWithPrefixAndSuff
   suffixer.io.in <> prefixer.io.out
   io.out <> suffixer.io.out
   io.suffixing := suffixer.io.suffixing
+  io.prefixing := prefixer.io.prefixing
 }
 
 class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
@@ -509,16 +513,40 @@ class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSi
     val out = Decoupled(typ.cloneType)
     val last = Output(Wire(Bool()))
     val enablePrefixing = Input(Wire(Bool()))
+    val suffixing = Output(Wire(Bool()))
+    val prefixing = Output(Wire(Bool()))
+    val triggerContent = Output(typ.cloneType)
+    val arbiterMonitor = Decoupled(typ.cloneType)
   })
 
-  val arbitraryPrefixerAndSuffixer = Module(new ArbitraryPrefixerAndSuffixer(typ, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
   val roundRobinArbiter = Module(new RRArbiter(typ, numProducers))
+  val arbitraryPrefixerAndSuffixer = Module(new ArbitraryPrefixerAndSuffixer(typ, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
+
+  val suffixing = arbitraryPrefixerAndSuffixer.io.suffixing
+  val prefixing = arbitraryPrefixerAndSuffixer.io.prefixing
+
+  io.suffixing := suffixing
+  io.prefixing := prefixing
+
+  val updateTriggerContent = io.out.fire() && prefixing && !suffixing
+  val triggerContentReg = RegEnable(roundRobinArbiter.io.out.bits, updateTriggerContent)
 
   roundRobinArbiter.io.in <> io.in
   arbitraryPrefixerAndSuffixer.io.in <> roundRobinArbiter.io.out
   arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid && io.enablePrefixing
   io.out <> arbitraryPrefixerAndSuffixer.io.out
+  io.arbiterMonitor.bits := roundRobinArbiter.io.out.bits
+  io.arbiterMonitor.valid := roundRobinArbiter.io.out.valid
   io.last := arbitraryPrefixerAndSuffixer.io.suffixing
+
+  // The following condition ensures `io.triggerContent` only acts as a passthrough
+  // for `roundRobinArbiter.io.out.bits` when this module is actually outputting
+  // the prefix
+  when (prefixing && !suffixing && !arbitraryPrefixerAndSuffixer.io.in.ready) {
+    io.triggerContent := roundRobinArbiter.io.out.bits
+  } .otherwise {
+    io.triggerContent := triggerContentReg
+  }
 }
 
 class GenerateAndSubmitPacketSequenceDependingOnAcknowledgement[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
