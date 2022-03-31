@@ -1,2 +1,2 @@
 -Dsbt.sourcemode=true
--Dsbt.workspace=$PWD
+-Dsbt.workspace=/home/lucas/Repos/meep_rocket_experimental/rocket-chip
