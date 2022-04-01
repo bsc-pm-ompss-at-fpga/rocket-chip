@@ -107,6 +107,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
   
+  
 	behavior of "RRArbiterWithPrefixAndSuffix"
   it should "let data elements coming from independent input channels to be transmitted exactly once, while also being prefixed and suffixed" in {
     val inputType = UInt(64.W)
@@ -167,10 +168,12 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
           c.io.triggerContent.expect(triggerPacket.U)
 
+          c.io.last.expect(false.B)
           checkWhetherOutputPacketIsAvailable(prefixValue, true)
           c.io.out.ready.poke(true.B)
           c.io.out.valid.expect(true.B)
 
+          c.io.last.expect(false.B)
           val fetchedValue = c.io.out.bits.peek().litValue.toInt
 
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
@@ -184,6 +187,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
           c.io.triggerContent.expect(triggerPacket.U)
 
+          c.io.last.expect(true.B)
           checkWhetherOutputPacketIsAvailable(suffixValue, true)
           driveInputMap(inputMap)
         }

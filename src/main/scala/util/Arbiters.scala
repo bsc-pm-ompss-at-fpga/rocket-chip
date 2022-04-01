@@ -537,7 +537,7 @@ class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSi
   io.out <> arbitraryPrefixerAndSuffixer.io.out
   io.arbiterMonitor.bits := roundRobinArbiter.io.out.bits
   io.arbiterMonitor.valid := roundRobinArbiter.io.out.valid
-  io.last := arbitraryPrefixerAndSuffixer.io.suffixing
+  io.last := suffixing
 
   // The following condition ensures `io.triggerContent` only acts as a passthrough
   // for `roundRobinArbiter.io.out.bits` when this module is actually outputting
