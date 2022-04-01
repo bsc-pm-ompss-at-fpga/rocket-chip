@@ -392,6 +392,8 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 class RetirementHandlerIO (nCores: Int) extends Bundle {
 	val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 	val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle)
+
+	override def cloneType = new RetirementHandlerIO(nCores).asInstanceOf[this.type]
 }
 
 class RetirementHandler (nCores: Int) extends Module {
@@ -409,6 +411,8 @@ class RetirementHandler (nCores: Int) extends Module {
 	io.picosFinishedInterface.valid := arbiter.io.out.valid
 	arbiter.io.out.ready := io.picosFinishedInterface.empty
 	io.picosFinishedInterface.last := arbiter.io.last
+
+	arbiter.io.enablePrefixing := true.B
 }
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
