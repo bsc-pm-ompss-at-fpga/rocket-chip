@@ -539,6 +539,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
         val testCoreID = r.nextInt(numTestedCores)
         val testParentID = r.nextLong() & 0xffffffffL
         val testNanosID = r.nextLong() & 0xffffffffL
+        val testDest = if (testNumDeps == 0) 3 else 2
 
         val INVALID_TYPE = 0
         val IN_TYPE = 1
@@ -573,12 +574,14 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
         //println("Just crossed firstSubmission zone")
 
         checkPacket0(c.io.picosSubMaster, testNumDeps, testTaskNumber)
+        c.io.dest.expect(testDest.U)
         c.io.picosSubMaster.ready.poke(true.B)
 
           c.clock.step()
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
         checkPacket1(c.io.picosSubMaster, testParentID)
+        c.io.dest.expect(testDest.U)
 
           c.clock.step()
           c.io.picosSubMaster.ready.poke(false.B)
@@ -587,6 +590,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
         checkPacket2(c.io.picosSubMaster, testNanosID)
+        c.io.dest.expect(testDest.U)
 
           c.clock.step()
           c.io.picosSubMaster.ready.poke(false.B)
@@ -614,6 +618,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
           c.io.picosSubMaster.valid.expect(true.B)
           c.io.picosSubMaster.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
+          c.io.dest.expect(testDest.U)
 
             c.clock.step()
             c.io.picosSubMaster.ready.poke(false.B)
@@ -623,6 +628,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           if (testDepKind1 != 0) {
             c.io.picosSubMaster.valid.expect(true.B)
             c.io.picosSubMaster.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
+            c.io.dest.expect(testDest.U)
             //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
               c.clock.step()

@@ -61,20 +61,22 @@ class RocketSubsystem(implicit p: Parameters) extends BaseSubsystem with HasRock
 	}
 }
 
-class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSubsystemModuleImp(_outer)
-	with HasTilesModuleImp
-{
-  printf(s"[RocketSubsystemModuleImp]: The current system has ${outer.nTiles} tiles.\n")
-
-  val picosIO = IO(new Bundle {
-    // TODO: REMOVE THIS
-    //val picosFinishedInterface  = new PicosFifoBundle(UInt(64.W))
+class PicosIO extends Bundle with HasDest {
     val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
     val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
     val picosSubInterface       = new PicosFifoBundle(UInt(64.W)) with HasDest
     val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
     val pmException             = Output(UInt(4.W))
-  })
+
+    override def cloneType = (new PicosIO).asInstanceOf[this.type]
+}
+
+class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSubsystemModuleImp(_outer)
+	with HasTilesModuleImp
+{
+  printf(s"[RocketSubsystemModuleImp]: The current system has ${outer.nTiles} tiles.\n")
+
+  val picosIO = IO(new PicosIO)
   
   var nCores = outer.delegates.length
 
@@ -82,6 +84,7 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
 
   picosIO.picosSubInterface <> pmanager.io.picosSubInterface
   picosIO.picosFinishedInterface <> pmanager.io.picosFinishedInterface
+  picosIO.dest <> pmanager.io.dest
   pmanager.io.picosReadyInterface <> picosIO.picosReadyInterface
   pmanager.io.picosAckInterface <> picosIO.picosAckInterface
 

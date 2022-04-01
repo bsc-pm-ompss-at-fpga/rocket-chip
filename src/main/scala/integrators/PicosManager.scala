@@ -21,7 +21,7 @@ object ReadyPacket {
 }
 
 trait HasDest extends Bundle{
-				val dest                     		= UInt(3.W)
+				val dest                     		= UInt(3.W).asOutput
 }
 
 class PicosFifoBundle[T <: Data](typ: T = UInt(64.W)) extends Bundle {
@@ -49,24 +49,13 @@ class PicosRawReadyBundle extends Bundle {
 				override def cloneType = new PicosRawReadyBundle().asInstanceOf[this.type]
 }
 
-class PicosRawSubmissionBundle extends Bundle with HasDest {
-				val payload                     = UInt(64.W)
-
-				override def cloneType = new PicosRawSubmissionBundle().asInstanceOf[this.type]
-}
-
 class ReadyTaskIO(nCores: Int) extends Bundle {
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
 }
 
-class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
-        // TODO: Clear these deprecated signals
-				// val tag                     = Flipped(Vec(nCores, UInt(64.W).asOutput))
-				// val subQInterface           = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
-				// val subRequest              = Flipped(Vec(nCores, Decoupled(RoutingInfo(64, 48))))
-
+class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle with HasDest{
 				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
@@ -76,12 +65,11 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 				val taskInfoVec            		= dontTouch( Flipped(Vec(nCores, Decoupled(new TaskInfo))) )
 				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
 
-				// TODO: REMOVE THIS
 				//val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
 				val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
 				// TODO: Remove the dontTouch
-				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType) with HasDest)
+				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType))
 				val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
 
 				val pmException               = UInt(4.W).asOutput
@@ -135,7 +123,7 @@ trait HasInnerRoutingInfo extends Bundle {
 				val routingInfo								= Decoupled((new RoutingInfo(2, 3 + 15 + 15)))
 }
 
-class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle {
+class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle with HasDest {
 				val argsAndParentInfo      		= Flipped(Decoupled(new ArgsAndParentInfo))
 				val taskInfo 		           		= Flipped(Decoupled(new TaskInfo))
 
@@ -150,7 +138,7 @@ class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) e
 }
 
 class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ) with HasInnerRoutingInfo with HasDest)
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ) with HasInnerRoutingInfo)
 				val cycleLength = 3
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
@@ -252,7 +240,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 }
 
 class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: Int = 33, typ: T = UInt(64.W)) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ.cloneType) with HasDepInfo with HasDest)
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ.cloneType) with HasDepInfo)
 
 				val downtimeBetweenSubmissions = 0
 
@@ -281,7 +269,7 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
-class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle {
+class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle with HasDest {
 				val argsAndParentInfoVec  = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
 				val taskInfoVec 		      = Flipped(Vec(nCores, Decoupled(new TaskInfo)))
 				val depInfoVec  				  = Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo))))
@@ -290,10 +278,12 @@ class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends B
 				val picosSubMaster        = Decoupled(typ.cloneType)
 				val numStartedSubmissions = UInt(64.W).asOutput
 				val enabled               = Bool().asInput
+
+				override def cloneType = new SubmissionHandlerIO(nCores, typ.cloneType).asInstanceOf[this.type]
 }
 
 class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequenceLength: Int = 33, routingQDepth: Int = 0, numDownCycles: Int = 0) extends Module {
-				val io = IO(new SubmissionHandlerIO(nCores, typ) with HasDest)
+				val io = IO(new SubmissionHandlerIO(nCores, typ))
 
 				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength, typ)).io}
 				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
@@ -462,7 +452,7 @@ class RetirementHandler (nCores: Int) extends Module {
 }
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
-	val io = IO(new RealManagerIO(nCores) with HasDest)
+	val io = IO(new RealManagerIO(nCores))
 
 	val workFetchController = Module(new ReadyPacketExtractor(nCores))
 	val submissionController = Module(new SubmissionHandler(nCores))
@@ -472,7 +462,12 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	for (i <- 0 until nCores) {
 		workFetchController.io.readyRequestInterface(i) <> io.readyRequestInterface(i)
 		io.readyQInterface(i) <> workFetchController.io.readyQInterface(i)
+		submissionController.io.argsAndParentInfoVec(i) <> io.argsAndParentInfoVec(i)
+		submissionController.io.taskInfoVec(i) <> io.taskInfoVec(i)
+		submissionController.io.depInfoVec(i) <> io.depInfoVec(i)
 	}
-
-	//io.picosSubInterface <> submissionController.io.picosSubMaster
+	submissionController.io.picosAckInterface <> io.picosAckInterface
+	
+	io.picosSubInterface <> submissionController.io.picosSubMaster
+	io.dest := submissionController.io.dest
 }
