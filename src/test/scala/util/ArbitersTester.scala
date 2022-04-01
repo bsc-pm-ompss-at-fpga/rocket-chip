@@ -4,6 +4,7 @@ package freechips.rocketchip.util
 import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
+import freechips.rocketchip.integrators.RetirementHandler
 
 //import Array._
 //import scala.collection.SortedSet
@@ -106,7 +107,6 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-  
   
 	behavior of "RRArbiterWithPrefixAndSuffix"
   it should "let data elements coming from independent input channels to be transmitted exactly once, while also being prefixed and suffixed" in {
@@ -354,4 +354,122 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-}
+
+	behavior of "RetirementHandler"
+  it should "Display about the same functionality as RRArbiterWithPrefixAndSuffix but with the ability to clean retirement packets and generate tID information" in {
+    val inputType = UInt(64.W)
+    val sequenceLength = 3
+    val prefixValue = 3
+    val suffixValue = 0
+    val numTestLoops = 100
+    var triggerPacket = BigInt(0L)
+
+    test(new RetirementHandler(numTestedCores)) { c =>
+      val generateInputMap = () => {                                                                                        
+        val hashMap = new HashMap[Int, Long]()                                                                                 
+        val reverseMap = new HashMap[Long, Int]
+        
+        for (i <- 0 until numTestedCores) {
+          val testedTID = r.nextInt(1048576).toLong
+          val testedPicosID = r.nextInt(1048576).toLong
+          val packet = testedPicosID | (testedTID << 32)
+          if (nextBoolean() && !reverseMap.contains(packet)) {
+            hashMap += (i -> packet)
+            reverseMap += (testedPicosID -> i)
+          }
+        }
+        (hashMap, reverseMap)
+      } 
+
+      // TODO: Apply DRY to this function
+      val checkWhetherOutputPacketIsAvailable = (value : Int, step : Boolean) => {
+        c.io.picosFinishedInterface.data.payload.expect(value.U)
+        c.io.picosFinishedInterface.valid.expect(true.B)
+        c.io.picosFinishedInterface.empty.poke(true.B) // After this line, we can be sure a firing has happened
+        if (step) {
+          c.clock.step()
+          c.io.picosFinishedInterface.empty.poke(false.B)
+        }
+      }
+
+      val generateEmptyInputMap = () => {
+        var hashMap = new HashMap[Int, Long]()                                                                                 
+      }
+
+      val driveEmptyInputMap = () => {
+        for (i <- 0 until numTestedCores) {
+          c.io.retInterface(i).valid.poke(false.B)
+        }
+      }
+
+      val driveInputMap = (inputMap : HashMap[Int, Long]) => {
+        driveEmptyInputMap()
+        inputMap.foreach{ case (idx, value) =>
+          c.io.retInterface(idx).valid.poke(true.B)
+          c.io.retInterface(idx).bits.poke(value.U)
+        }
+      }
+
+      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap: HashMap[Int, Long], reverseMap: HashMap[Long, Int]) => {
+        val numElements = inputMap.size
+        driveInputMap(inputMap)
+        for (i <- 0 until numElements) {
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: Iteration #$i")
+          //c.io.arbiterMonitor.valid.expect(true.B)
+          //triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          //c.io.triggerContent.expect(triggerPacket.U)
+
+          //c.io.last.expect(false.B)
+          checkWhetherOutputPacketIsAvailable(prefixValue, true)
+          c.io.picosFinishedInterface.empty.poke(true.B)
+          c.io.picosFinishedInterface.valid.expect(true.B)
+
+          //c.io.last.expect(false.B)
+          val fetchedPicosID = c.io.picosFinishedInterface.data.payload.peek().litValue.toInt
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          //c.io.triggerContent.expect(triggerPacket.U)
+
+          assert(reverseMap.contains(fetchedPicosID))
+
+          val idx = reverseMap(fetchedPicosID)
+          val tidGroundTruth = inputMap(idx) >> 32
+          reverseMap.remove(fetchedPicosID)
+          inputMap.remove(idx)
+
+          c.io.picosFinishedInterface.data.tid.expect(tidGroundTruth.U)
+            c.clock.step()
+          c.io.picosFinishedInterface.empty.poke(false.B)
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+          //c.io.triggerContent.expect(triggerPacket.U)
+
+          //c.io.last.expect(true.B)
+          checkWhetherOutputPacketIsAvailable(suffixValue, true)
+          driveInputMap(inputMap)
+        }
+        assert(inputMap.size == 0)
+
+        c.io.picosFinishedInterface.empty.poke(true.B)
+        c.io.picosFinishedInterface.valid.expect(false.B)
+          c.clock.step()
+        c.io.picosFinishedInterface.empty.poke(false.B)
+      }
+
+      val ensureNothingIsBeingOutputted = () => {
+        c.io.picosFinishedInterface.valid.expect(false.B)
+      }
+
+      for (i <- 0 until numTestLoops) {
+        val (inputMap, reverseMap) = generateInputMap()
+
+        ensureNothingIsBeingOutputted()
+          c.clock.step()
+        ensureThatAllInputsAreTransmittedExactlyOnce(inputMap, reverseMap)
+      }
+    }
+  }
+
+} // DO NOT COMMENT OUT
