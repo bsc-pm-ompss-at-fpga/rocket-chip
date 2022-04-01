@@ -55,21 +55,19 @@ class ReadyTaskIO(nCores: Int) extends Bundle {
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
 }
 
-class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle with HasDest{
+class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle with HasDest {
 				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
+
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
 				val readyQInterface         = Vec(nCores, Decoupled(new ReadyPacket))
 
-				// TODO: Remove the dontTouch to make sure that these signals are being used
-				val argsAndParentInfoVec      = dontTouch( Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo))) )
-				val taskInfoVec            		= dontTouch( Flipped(Vec(nCores, Decoupled(new TaskInfo))) )
-				val depInfoVec   							= dontTouch( Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo)))) )
+				val argsAndParentInfoVec      = Flipped(Vec(nCores, Decoupled(new ArgsAndParentInfo)))
+				val taskInfoVec            		= Flipped(Vec(nCores, Decoupled(new TaskInfo)))
+				val depInfoVec   							= Flipped(Vec(nCores, Decoupled(Vec(2, new DepInfo))))
 
-				//val picosFinishedInterface  = new PicosFifoBundle(typ.cloneType)
-				val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
-				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
-				// TODO: Remove the dontTouch
-				val picosSubInterface       = dontTouch(new PicosFifoBundle(typ.cloneType))
+				val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle)
+				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
+				val picosSubInterface       = new PicosFifoBundle(typ.cloneType)
 				val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
 
 				val pmException               = UInt(4.W).asOutput
@@ -391,64 +389,15 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 	}
 }
 
-class OldCoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
-	val io = IO(new RealManagerIO(nCores))
-	val ret_arbiter = Module(new RRArbiter(UInt(64.W), nCores))
-
-	val retQ = Module( new Queue(UInt(64.W), qDepth) )
-	dontTouch(retQ.io.count)
-	val retQEnqCounter = dontTouch(RegInit(0.U(64.W)))
-	retQEnqCounter := Mux(retQ.io.enq.fire(), retQEnqCounter + 1.U, retQEnqCounter)
-	val retQDeqCounter = dontTouch(RegInit(0.U(64.W)))
-	retQDeqCounter := Mux(retQ.io.deq.fire(), retQDeqCounter + 1.U, retQDeqCounter)
-
-	// Control access to Retirement Queue with RRArbiter
-	ret_arbiter.io.in <> io.retInterface
-
-	// Implements writes to the Picos FiFo Retirement Interface
-	val delayerAdapter = Module(new DelayerAdapter(UInt(64.W)))
-	retQ.io.enq <> ret_arbiter.io.out
-	delayerAdapter.io.in <> retQ.io.deq
-
-	//TODO: LET THIS GET TID INFORMATION FROM THE INNER ARBITER
-	//io.picosFinishedInterface.data := delayerAdapter.io.out.bits
-	io.picosFinishedInterface.valid := delayerAdapter.io.out.valid
-	delayerAdapter.io.out.ready := io.picosFinishedInterface.empty
-
-	val readyPacketExtractor = Module(new ReadyPacketExtractor(nCores))
-	readyPacketExtractor.io.picosReadyInterface := io.picosReadyInterface
-
-	// Implement submission interactions
-	// FIXME: Re-activate the following code with adaptations to
-	//        let it interact with the new interface
-	/*
-	val submissionHandler = Module(new SubmissionHandler(nCores, UInt(32.W), 48, 200))
-
-	submissionHandler.io.tag <> io.tag
-	submissionHandler.io.subQInterface <> io.subQInterface
-	submissionHandler.io.subRequest <> io.subRequest
-	io.picosSubInterface.data := submissionHandler.io.picosSubMaster.bits
-	io.picosSubInterface.valid := submissionHandler.io.picosSubMaster.valid
-	submissionHandler.io.picosSubMaster.ready := io.picosSubInterface.empty
-
-	val submissionCounter = Wire(UInt(64.W))
-	val retirementCounter = Wire(UInt(64.W))
-	val numInflightTasks  = Wire(UInt(64.W))
-
-	retirementCounter := retQDeqCounter
-	submissionCounter := submissionHandler.io.numStartedSubmissions
-	numInflightTasks := submissionCounter - retirementCounter
-
-	//submissionHandler.io.enabled := numInflightTasks <= 250.U(64.W)
-	submissionHandler.io.enabled := true.B
-	*/
+class RetirementHandlerIO (nCores: Int) extends Bundle {
+	val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
+	val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle)
 }
 
 class RetirementHandler (nCores: Int) extends Module {
-	// TODO: REPLACE THIS WITH ACTUAL INTERFACE
-	val io = IO(new Bundle{
-		val derp = Output(UInt(64.W))
-	})
+	val io = IO(new RetirementHandlerIO(nCores))
+
+	// TODO: ADD IMPLEMENTATION
 }
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
@@ -458,16 +407,21 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	val submissionController = Module(new SubmissionHandler(nCores))
 	val retirementController = Module(new RetirementHandler(nCores))
 
-	workFetchController.io.picosReadyInterface <> io.picosReadyInterface
 	for (i <- 0 until nCores) {
+		retirementController.io.retInterface(i) <> io.retInterface(i)
+
 		workFetchController.io.readyRequestInterface(i) <> io.readyRequestInterface(i)
 		io.readyQInterface(i) <> workFetchController.io.readyQInterface(i)
+
 		submissionController.io.argsAndParentInfoVec(i) <> io.argsAndParentInfoVec(i)
 		submissionController.io.taskInfoVec(i) <> io.taskInfoVec(i)
 		submissionController.io.depInfoVec(i) <> io.depInfoVec(i)
 	}
+	io.picosFinishedInterface <> retirementController.io.picosFinishedInterface
+
+	workFetchController.io.picosReadyInterface <> io.picosReadyInterface
+
 	submissionController.io.picosAckInterface <> io.picosAckInterface
-	
 	io.picosSubInterface <> submissionController.io.picosSubMaster
 	io.dest := submissionController.io.dest
 }
