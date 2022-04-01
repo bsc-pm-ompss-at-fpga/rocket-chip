@@ -91,13 +91,15 @@ trait HasDepInfo extends Bundle{
 				val depInfo   							  = Flipped(Decoupled(Vec(2, new DepInfo)))
 }
 
-class DependenceInfoAdapterIO extends Bundle {
+class DependenceInfoAdapterIO[T <: Data](typ: T = UInt(64.W)) extends Bundle {
 				val depInfo   							  = Flipped(Decoupled(Vec(2, new DepInfo)))
-				val picosSubData							= Decoupled(new PicosRawSubmissionBundle)
+				val picosSubData							= Decoupled(typ.cloneType)
+
+				override def cloneType = new DependenceInfoAdapterIO(typ.cloneType).asInstanceOf[this.type]
 }
 
-class DependenceInfoAdapter extends Module {
-				val io = IO(new DependenceInfoAdapterIO)
+class DependenceInfoAdapter[T <: Data](typ: T = UInt(64.W)) extends Module {
+				val io = IO(new DependenceInfoAdapterIO(typ.cloneType))
 
 				val VOID_TYPE = 0.U
 				val IN_TYPE = 1.U
@@ -113,11 +115,11 @@ class DependenceInfoAdapter extends Module {
 				//             be depInfo(0), not depInfo(1)
 				when (io.depInfo.bits(1).kind === VOID_TYPE) {
 					io.depInfo.ready := io.picosSubData.ready
-					io.picosSubData.bits.payload := Cat(Seq(io.depInfo.bits(0).kind, twoZeros, io.depInfo.bits(0).pointer))
+					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(0).kind, twoZeros, io.depInfo.bits(0).pointer))
 					io.picosSubData.valid := io.depInfo.valid
 				} .otherwise {
 					io.depInfo.ready := io.picosSubData.ready && (activeDep === 1.U)
-					io.picosSubData.bits.payload := Cat(Seq(io.depInfo.bits(activeDep).kind, twoZeros, io.depInfo.bits(activeDep).pointer))
+					io.picosSubData.bits := Cat(Seq(io.depInfo.bits(activeDep).kind, twoZeros, io.depInfo.bits(activeDep).pointer))
 					io.picosSubData.valid := io.depInfo.valid
 					when (io.picosSubData.fire()) {
 						activeDep := activeDep + 1.U
@@ -148,7 +150,7 @@ class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) e
 }
 
 class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores, new PicosRawSubmissionBundle) with HasInnerRoutingInfo with HasDest)
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ) with HasInnerRoutingInfo with HasDest)
 				val cycleLength = 3
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
@@ -173,72 +175,72 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				val sixteenZeros = 0.U(16.W)
 
 				// TODO: This will need to be modified when we start supporting nested tasks
-				switch (counter) {
-					is (0.U) {
-						// TODO: We still need to produce the routing packets for the dependence sequence
-						io.routingInfo.valid := io.taskInfo.valid && !headerInnerRoutingPacketWasSent
-						io.routingInfo.bits.arbID := 0.U
-						io.routingInfo.bits.numPackets := 3.U
+			switch (counter) {
+				is (0.U) {
+					// TODO: We still need to produce the routing packets for the dependence sequence
+					io.routingInfo.valid := io.taskInfo.valid && !headerInnerRoutingPacketWasSent
+					io.routingInfo.bits.arbID := 0.U
+					io.routingInfo.bits.numPackets := 3.U
 
-						io.routingInfoOuter.valid := io.taskInfo.valid && !outerRoutingPacketWasSent
-						io.routingInfoOuter.bits.arbID := io.coreID
-						// The following operation must be carried out with at least 6-bit precision
-						// because we need to be able to describe up to 33 packets per sequence
-						io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
+					io.routingInfoOuter.valid := io.taskInfo.valid && !outerRoutingPacketWasSent
+					io.routingInfoOuter.bits.arbID := io.coreID
+					// The following operation must be carried out with at least 6-bit precision
+					// because we need to be able to describe up to 33 packets per sequence
+					io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
-						when (io.suggestedTaskNumber =/= 0.U) {
-							io.picosSubData.bits.payload := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, sixteenZeros))
-						} .otherwise {
-							io.picosSubData.bits.payload := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
-						}
-
-						// The following ensures we do not leave this state before
-						// the header inner routing packet is sent to the leaf
-						// core-specific submission GuidedArbiter and the outer
-						// routing packet is sent to the master submission GuidedArbiter
-						io.picosSubData.valid := io.taskInfo.valid && (io.routingInfo.fire() || headerInnerRoutingPacketWasSent) && (io.routingInfoOuter.fire() || outerRoutingPacketWasSent)
-
-						when (io.routingInfo.fire()) {
-							headerInnerRoutingPacketWasSent := true.B
-						}
-
-						when (io.routingInfoOuter.fire()) {
-							outerRoutingPacketWasSent := true.B
-						}
+					when (io.suggestedTaskNumber =/= 0.U) {
+						io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, sixteenZeros))
+					} .otherwise {
+						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, sixteenZeros))
 					}
-					is (1.U) {
-						io.picosSubData.bits.payload := 0.U
 
-						io.routingInfo.valid := io.taskInfo.valid && !payloadInnerRoutingPacketWasSent
-						io.routingInfo.bits.arbID := 1.U
-						// TODO: Check if this is actually synthesized with 6-bit precision
-						io.routingInfo.bits.numPackets := 0.U(6.W) + numDeps + numArgs
+					// The following ensures we do not leave this state before
+					// the header inner routing packet is sent to the leaf
+					// core-specific submission GuidedArbiter and the outer
+					// routing packet is sent to the master submission GuidedArbiter
+					io.picosSubData.valid := io.taskInfo.valid && (io.routingInfo.fire() || headerInnerRoutingPacketWasSent) && (io.routingInfoOuter.fire() || outerRoutingPacketWasSent)
 
-						// The following ensures we do not leave this state before
-						// the payload inner routing packet is sent to the leaf
-						// core-specific submission GuidedArbiter
-						io.picosSubData.valid := io.routingInfo.fire() || payloadInnerRoutingPacketWasSent
-
-						when (io.routingInfo.fire()) {
-							payloadInnerRoutingPacketWasSent := true.B
-						}
+					when (io.routingInfo.fire()) {
+						headerInnerRoutingPacketWasSent := true.B
 					}
-					is (2.U) {
-						io.picosSubData.bits.payload := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
-						io.picosSubData.valid := io.taskInfo.valid
 
-						// The following will ensure data at taskInfo is consumed 
-						// when an out transaction is performed.
-						// We here assume that valid inputs will never change
-						// since they are first asserted and the transaction
-						// is finally completed.
-						io.taskInfo.ready := io.picosSubData.ready
+					when (io.routingInfoOuter.fire()) {
+						outerRoutingPacketWasSent := true.B
 					}
 				}
+				is (1.U) {
+					io.picosSubData.bits := 0.U
 
-				when (io.picosSubData.fire()) {
-					when (wrapCounter) {
-						counter := 0.U
+					io.routingInfo.valid := io.taskInfo.valid && !payloadInnerRoutingPacketWasSent
+					io.routingInfo.bits.arbID := 1.U
+					// TODO: Check if this is actually synthesized with 6-bit precision
+					io.routingInfo.bits.numPackets := 0.U(6.W) + numDeps + numArgs
+
+					// The following ensures we do not leave this state before
+					// the payload inner routing packet is sent to the leaf
+					// core-specific submission GuidedArbiter
+					io.picosSubData.valid := io.routingInfo.fire() || payloadInnerRoutingPacketWasSent
+
+					when (io.routingInfo.fire()) {
+						payloadInnerRoutingPacketWasSent := true.B
+					}
+				}
+				is (2.U) {
+					io.picosSubData.bits := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), nanosID))
+					io.picosSubData.valid := io.taskInfo.valid
+
+					// The following will ensure data at taskInfo is consumed 
+					// when an out transaction is performed.
+					// We here assume that valid inputs will never change
+					// since they are first asserted and the transaction
+					// is finally completed.
+					io.taskInfo.ready := io.picosSubData.ready
+				}
+			}
+
+			when (io.picosSubData.fire()) {
+				when (wrapCounter) {
+					counter := 0.U
 						headerInnerRoutingPacketWasSent := false.B
 						payloadInnerRoutingPacketWasSent := false.B
 						outerRoutingPacketWasSent := false.B
@@ -297,6 +299,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 				val taskNumberCounter = RegInit(0.U(32.W))
+				val destReg = RegInit(0.U(3.W))
 
 				for (i <- 0 until nCores) {
 					coreSubmissionHandlers(i).taskInfo <> io.taskInfoVec(i)
@@ -321,10 +324,14 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 
 				when (routingArbiter.io.out.fire()) {
 					taskNumberCounter := taskNumberCounter + 1.U
+
+					val numPacketsToRoute = routingArbiter.io.out.bits.numPackets
+					destReg := Mux(numPacketsToRoute === 3.U, 3.U, 2.U)
 				}
 
 				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
 				io.picosSubMaster <> masterGuidedArbiter.io.out
+				io.dest := destReg
 }
 
 trait HasRPEDebugSignals extends Bundle {
