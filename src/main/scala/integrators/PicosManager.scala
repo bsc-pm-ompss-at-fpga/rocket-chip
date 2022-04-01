@@ -3,7 +3,7 @@ package freechips.rocketchip.integrators
 import Chisel._
 //import chisel3.iotesters._
 //import org.scalatest._
-import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, DelayerAdapter}
+import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, DelayerAdapter, RRArbiterWithPrefixAndSuffix}
 import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import chisel3.dontTouch
@@ -397,7 +397,18 @@ class RetirementHandlerIO (nCores: Int) extends Bundle {
 class RetirementHandler (nCores: Int) extends Module {
 	val io = IO(new RetirementHandlerIO(nCores))
 
-	// TODO: ADD IMPLEMENTATION
+	val arbiter = Module(new RRArbiterWithPrefixAndSuffix(UInt(64.W), nCores, 3, 3, 0))
+
+	val rawRetirementPacket = arbiter.io.out.bits
+	val cleanRetirementPacket = rawRetirementPacket(31, 0)
+	val tID = arbiter.io.triggerContent(63, 32)
+
+	io.retInterface.zip(arbiter.io.in).foreach { case (outer, inner) => inner <> outer }
+	io.picosFinishedInterface.data.payload := cleanRetirementPacket
+	io.picosFinishedInterface.data.tid := tID
+	io.picosFinishedInterface.valid := arbiter.io.out.valid
+	arbiter.io.out.ready := io.picosFinishedInterface.empty
+	io.picosFinishedInterface.last := arbiter.io.last
 }
 
 class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters) extends Module {
