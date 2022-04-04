@@ -111,6 +111,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     c.valid.poke(false.B)
   }
 
+  /*
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -523,6 +524,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           }
       }
   }
+  */
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
     test(new SubmissionHandler(numTestedCores)) { c =>
@@ -592,6 +594,15 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
         checkPacket2(c.io.picosSubMaster, testNanosID)
         c.io.dest.expect(testDest.U)
 
+        var j = 0
+
+        if (j == testNumDeps) {
+          c.io.last.expect(true.B)
+          println("This was the last dep!")
+        } else {
+          c.io.last.expect(false.B)
+        }
+
           c.clock.step()
           c.io.picosSubMaster.ready.poke(false.B)
           waitRandomAmountOfCycles(c)
@@ -605,41 +616,55 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           waitRandomAmountOfCycles(c)
           c.io.picosSubMaster.ready.poke(true.B)
 
-        var j = 0
         while (j < testNumDeps) {
           val testDepPointer0 = r.nextLong() & 0xffffffffffffffL
           val testDepKind0 = r.nextInt(3) + 1
           val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
           val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
 
-          //println("Dep #" + j)
+          println("Dep #" + j)
 
           placeDepInfo(c.io.depInfoVec(testCoreID), testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
 
           c.io.picosSubMaster.valid.expect(true.B)
           c.io.picosSubMaster.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
           c.io.dest.expect(testDest.U)
+          j += 1
+
+          if (j == testNumDeps) {
+            c.io.last.expect(true.B)
+            println("This was the last dep!")
+          } else {
+            c.io.last.expect(false.B)
+          }
 
             c.clock.step()
-            c.io.picosSubMaster.ready.poke(false.B)
+          c.io.picosSubMaster.ready.poke(false.B)
             waitRandomAmountOfCycles(c)
-            c.io.picosSubMaster.ready.poke(true.B)
+          c.io.picosSubMaster.ready.poke(true.B)
 
           if (testDepKind1 != 0) {
+            println("Dep #" + j)
             c.io.picosSubMaster.valid.expect(true.B)
             c.io.picosSubMaster.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
             c.io.dest.expect(testDest.U)
+            j += 1
+
+            if (j == testNumDeps) {
+              c.io.last.expect(true.B)
+              println("This was the last dep!")
+            } else {
+              c.io.last.expect(false.B)
+            }
             //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
               c.clock.step()
               c.io.picosSubMaster.ready.poke(false.B)
               waitRandomAmountOfCycles(c)
               c.io.picosSubMaster.ready.poke(true.B)
-            j += 1
           }
-          j += 1
 
-            unplaceDepInfo(c.io.depInfoVec(testCoreID))
+          unplaceDepInfo(c.io.depInfoVec(testCoreID))
 
             waitRandomAmountOfCycles(c)
         }
