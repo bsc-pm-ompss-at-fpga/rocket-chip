@@ -55,7 +55,7 @@ class ReadyTaskIO(nCores: Int) extends Bundle {
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
 }
 
-class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle with HasDest {
+class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZeros: Int = 48)(implicit p: Parameters) extends Bundle {
 				val retInterface            = Flipped(Vec(nCores, Decoupled(UInt(64.W))))
 
 				val readyRequestInterface   = Flipped(Vec(nCores, Decoupled(UInt(0.W))))
@@ -67,7 +67,7 @@ class RealManagerIO[T <: Data](nCores: Int, typ: T = UInt(64.W), burstSizeWithZe
 
 				val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle)
 				val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle))
-				val picosSubInterface       = new PicosFifoBundle(typ.cloneType)
+				val picosSubInterface       = new PicosFifoBundle(typ.cloneType) with HasDest
 				val picosAckInterface       = Flipped(new PicosFifoBundle(UInt(2.W)))
 
 				val pmException               = UInt(4.W).asOutput
@@ -274,6 +274,7 @@ class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends B
 				val picosAckInterface 		= Flipped(new PicosFifoBundle(UInt(2.W)))
 
 				val picosSubMaster        = Decoupled(typ.cloneType)
+				val last									= Bool().asOutput
 				val numStartedSubmissions = UInt(64.W).asOutput
 				val enabled               = Bool().asInput
 
@@ -309,6 +310,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				} .otherwise {
 					awaitingAcknowledgement := masterGuidedArbiter.io.last
 				}
+				io.last := masterGuidedArbiter.io.last
 
 				when (routingArbiter.io.out.fire()) {
 					taskNumberCounter := taskNumberCounter + 1.U
@@ -437,6 +439,10 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 	workFetchController.io.picosReadyInterface <> io.picosReadyInterface
 
 	submissionController.io.picosAckInterface <> io.picosAckInterface
-	io.picosSubInterface <> submissionController.io.picosSubMaster
-	io.dest := submissionController.io.dest
+
+	// TODO: Check if the following is also connecting empty and valid signals!
+	io.picosSubInterface.data := submissionController.io.picosSubMaster.bits
+	io.picosSubInterface.valid := submissionController.io.picosSubMaster.valid
+	io.picosSubInterface.last := submissionController.io.last
+	io.picosSubInterface.dest := submissionController.io.dest
 }

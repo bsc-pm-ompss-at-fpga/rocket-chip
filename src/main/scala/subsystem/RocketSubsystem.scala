@@ -61,7 +61,7 @@ class RocketSubsystem(implicit p: Parameters) extends BaseSubsystem with HasRock
 	}
 }
 
-class PicosIO extends Bundle with HasDest {
+class PicosIO extends Bundle {
     val picosFinishedInterface  = new PicosFifoBundle(new PicosRawRetirementBundle())
     val picosReadyInterface     = Flipped(new PicosFifoBundle(new PicosRawReadyBundle()))
     val picosSubInterface       = new PicosFifoBundle(UInt(64.W)) with HasDest
@@ -84,7 +84,6 @@ class RocketSubsystemModuleImp[+L <: RocketSubsystem](_outer: L) extends BaseSub
 
   picosIO.picosSubInterface <> pmanager.io.picosSubInterface
   picosIO.picosFinishedInterface <> pmanager.io.picosFinishedInterface
-  picosIO.dest <> pmanager.io.dest
   pmanager.io.picosReadyInterface <> picosIO.picosReadyInterface
   pmanager.io.picosAckInterface <> picosIO.picosAckInterface
 
