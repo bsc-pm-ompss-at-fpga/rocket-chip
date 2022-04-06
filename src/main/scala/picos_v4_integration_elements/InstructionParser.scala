@@ -140,7 +140,7 @@ class InstructionParser extends Module {
       io.taskInfo.bits.num_deps := registers(1)
       io.taskInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.taskInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.taskInfo.fire(), flag_success, flag_error)
   }
 
   when (state === s_add_args_and_parent_info) {
@@ -151,7 +151,7 @@ class InstructionParser extends Module {
       io.argsAndParentInfo.bits.num_args := registers(1)
       io.argsAndParentInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.argsAndParentInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.argsAndParentInfo.fire(), flag_success, flag_error)
   }
 
   when (state === s_send_in_dep) {
@@ -163,7 +163,7 @@ class InstructionParser extends Module {
       io.depInfo.bits(1).kind := 0.U
       io.depInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.depInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.depInfo.fire(), flag_success, flag_error)
   }
 
   when (state === s_send_in_deps) {
@@ -176,7 +176,7 @@ class InstructionParser extends Module {
       io.depInfo.bits(1).kind := 1.U
       io.depInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.depInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.depInfo.fire(), flag_success, flag_error)
   }
 
   when (state === s_send_out_dep) {
@@ -188,7 +188,7 @@ class InstructionParser extends Module {
       io.depInfo.bits(1).kind := 0.U
       io.depInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.depInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.depInfo.fire(), flag_success, flag_error)
   }
 
   when (state === s_send_out_deps) {
@@ -201,7 +201,7 @@ class InstructionParser extends Module {
       io.depInfo.bits(1).kind := 2.U
       io.depInfo.valid := true.B
 
-      io.resp.bits.data := Mux(io.depInfo.fire, flag_success, flag_error)
+      io.resp.bits.data := Mux(io.depInfo.fire(), flag_success, flag_error)
   }
 
   val retirementCount = RegInit(0.U(64.W))
