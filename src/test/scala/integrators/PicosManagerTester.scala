@@ -111,7 +111,12 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     c.valid.poke(false.B)
   }
 
-  /*
+  val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: Int, numDeps: Int, numArgs: Int) => {
+    c.io.routingInfoOuter.valid.expect(true.B)
+    c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
+    c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
+  }
+
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -421,12 +426,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
   }
 
-val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: Int, numDeps: Int, numArgs: Int) => {
-  c.io.routingInfoOuter.valid.expect(true.B)
-  c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
-  c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
-}
-
 	behavior of "CoreSpecificSubmissionHandler"
   it should "produce a valid header sequence" in {
       test(new CoreSpecificSubmissionHandler(numTestedCores, 33)) { c =>
@@ -446,6 +445,8 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
             val OUT_TYPE = 2
             val INOUT_TYPE = 3
 
+            //println(f"Iteration: $i")
+
             c.io.coreID.poke(testCoreID.U)
             c.io.routingInfoOuter.valid.expect(false.B)
 
@@ -453,6 +454,8 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
             c.io.picosSubData.ready.poke(true.B)
 
             placeTaskInfo(c.io.taskInfo, testNumDeps, testNanosID)
+              c.clock.step()
+            unplaceTaskInfo(c.io.taskInfo)
             c.io.routingInfoOuter.valid.expect(true.B)
             
             checkOuterRoutingPacket(c, testCoreID, testNumDeps, testNumArgs)
@@ -480,7 +483,6 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
               c.clock.step()
 
-            unplaceTaskInfo(c.io.taskInfo)
               // One extra step is needed because the routing packet
               // for the payload section takes one cycle to be fetched
               c.clock.step()
@@ -488,6 +490,8 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
               waitRandomAmountOfCycles(c)
 
             var j = 0
+            var tries = 0
+            var max_tries = 100
             while (j < testNumDeps) {
               val testDepPointer0 = r.nextLong() & 0xffffffffffffffL
               val testDepKind0 = r.nextInt(3) + 1
@@ -495,24 +499,47 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
               val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
 
               //println("Dep #" + j)
+              j += 1
 
               placeDepInfo(c.io.depInfo, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
+                c.clock.step()
+              unplaceDepInfo(c.io.depInfo)
 
-              c.io.picosSubData.valid.expect(true.B)
+              tries = 0
+              while (tries < max_tries) {
+                if (c.io.picosSubData.valid.peek().litToBoolean) {
+                  tries = max_tries + 1
+                } else {
+                  tries += 1
+                  c.clock.step()
+                }
+              }
+              assert(tries != max_tries)
+
+              //c.io.picosSubData.valid.expect(true.B)
               c.io.picosSubData.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
 
                 c.clock.step()
 
               if (testDepKind1 != 0) {
-                c.io.picosSubData.valid.expect(true.B)
+                //println("Dep #" + j)
+                j += 1
+
+                tries = 0
+                while (tries < max_tries) {
+                  if (c.io.picosSubData.valid.peek().litToBoolean) {
+                    tries = max_tries + 1
+                  } else {
+                    tries += 1
+                    c.clock.step()
+                  }
+                }
+                assert(tries != max_tries)
                 c.io.picosSubData.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
 
                   c.clock.step()
-                j += 1
               }
-              j += 1
 
-                unplaceDepInfo(c.io.depInfo)
 
                 waitRandomAmountOfCycles(c)
             }
@@ -524,7 +551,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           }
       }
   }
-  */
+
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
     test(new SubmissionHandler(numTestedCores)) { c =>
@@ -552,8 +579,8 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
         c.io.picosSubMaster.valid.expect(false.B)
         placeTaskInfo(c.io.taskInfoVec(testCoreID), testNumDeps, testNanosID)
-
           c.clock.step()
+        unplaceTaskInfo(c.io.taskInfoVec(testCoreID))
           c.clock.step()
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
@@ -561,6 +588,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
         if (firstSubmission) {
           // The system has not completed any submission sequence yet,
           // so there is no need to wait for an acknowledgement
+            c.clock.step()
           c.io.picosSubMaster.valid.expect(true.B)
           firstSubmission = false
         } else {
@@ -598,7 +626,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
         if (j == testNumDeps) {
           c.io.last.expect(true.B)
-          println("This was the last dep!")
+          //println("This was the last dep!")
         } else {
           c.io.last.expect(false.B)
         }
@@ -608,8 +636,6 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           waitRandomAmountOfCycles(c)
           c.io.picosSubMaster.ready.poke(true.B)
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
-
-        unplaceTaskInfo(c.io.taskInfoVec(testCoreID))
 
           c.clock.step()
           c.io.picosSubMaster.ready.poke(false.B)
@@ -622,9 +648,11 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
           val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
 
-          println("Dep #" + j)
+          //println("Dep #" + j)
 
           placeDepInfo(c.io.depInfoVec(testCoreID), testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
+            c.clock.step()
+          unplaceDepInfo(c.io.depInfoVec(testCoreID))
 
           c.io.picosSubMaster.valid.expect(true.B)
           c.io.picosSubMaster.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
@@ -633,7 +661,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
           if (j == testNumDeps) {
             c.io.last.expect(true.B)
-            println("This was the last dep!")
+            //println("This was the last dep!")
           } else {
             c.io.last.expect(false.B)
           }
@@ -644,7 +672,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
           c.io.picosSubMaster.ready.poke(true.B)
 
           if (testDepKind1 != 0) {
-            println("Dep #" + j)
+            //println("Dep #" + j)
             c.io.picosSubMaster.valid.expect(true.B)
             c.io.picosSubMaster.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
             c.io.dest.expect(testDest.U)
@@ -652,7 +680,7 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
 
             if (j == testNumDeps) {
               c.io.last.expect(true.B)
-              println("This was the last dep!")
+              //println("This was the last dep!")
             } else {
               c.io.last.expect(false.B)
             }
@@ -663,8 +691,6 @@ val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: I
               waitRandomAmountOfCycles(c)
               c.io.picosSubMaster.ready.poke(true.B)
           }
-
-          unplaceDepInfo(c.io.depInfoVec(testCoreID))
 
             waitRandomAmountOfCycles(c)
         }
