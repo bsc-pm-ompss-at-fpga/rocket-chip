@@ -248,13 +248,22 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 
 				val leafRoutingPacketsQueue = Module(new Queue(new RoutingInfo(2, 3 + 15 + 15), 2))
 
+				val taskInfoBuffer = Module(new Queue(new TaskInfo, 2))
+				val depInfoBuffer = Module(new Queue(Vec(2, new DepInfo), 2))
+				val argsAndParentInfoBuffer = Module(new Queue(new ArgsAndParentInfo, 2))
+
+				taskInfoBuffer.io.enq <> io.taskInfo
+				depInfoBuffer.io.enq <> io.depInfo
+				argsAndParentInfoBuffer.io.enq <> io.argsAndParentInfo
+
 				headerGenerator.io.coreID := io.coreID
-				headerGenerator.io.argsAndParentInfo := io.argsAndParentInfo
-				headerGenerator.io.taskInfo := io.taskInfo
+				headerGenerator.io.argsAndParentInfo <> argsAndParentInfoBuffer.io.deq
+				headerGenerator.io.taskInfo <> taskInfoBuffer.io.deq
 				headerGenerator.io.suggestedTaskNumber := io.suggestedTaskNumber
 				io.routingInfoOuter := headerGenerator.io.routingInfoOuter
 
-				dependenceInfoAdapter.io.depInfo := io.depInfo
+				//dependenceInfoAdapter.io.depInfo <> depInfoBuffer.io.deq
+				dependenceInfoAdapter.io.depInfo <> depInfoBuffer.io.deq
 
 				// TODO: Check whether it would make sense
 				//			 to disable it at any moment
@@ -440,9 +449,9 @@ class CoreRealPicosManager(nCores: Int, qDepth: Int = 16)(implicit p: Parameters
 
 	submissionController.io.picosAckInterface <> io.picosAckInterface
 
-	// TODO: Check if the following is also connecting empty and valid signals!
 	io.picosSubInterface.data := submissionController.io.picosSubMaster.bits
 	io.picosSubInterface.valid := submissionController.io.picosSubMaster.valid
 	io.picosSubInterface.last := submissionController.io.last
 	io.picosSubInterface.dest := submissionController.io.dest
+	submissionController.io.picosSubMaster.ready := io.picosSubInterface.empty
 }

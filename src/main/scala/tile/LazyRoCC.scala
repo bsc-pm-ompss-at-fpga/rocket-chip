@@ -149,6 +149,9 @@ val delegate = IO(new DelegateIO)
   
   delegate.retInterface <> picosMate.module.io.retInterface
   delegate.readyRequestInterface <> picosMate.module.io.readyRequestInterface
+  delegate.depInfo <> picosMate.module.io.depInfo
+  delegate.taskInfo <> picosMate.module.io.taskInfo
+  delegate.argsAndParentInfo <> picosMate.module.io.argsAndParentInfo
   picosMate.module.io.readyQInterface <> delegate.readyQInterface
   delegate.pmException := picosMate.module.io.pmException
   

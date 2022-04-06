@@ -16,17 +16,12 @@ import freechips.rocketchip.util.DontTouch
 import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
 
 class DelegateIO extends Bundle {
-  // TODO: Clear these deprecated signals
-  // val subQInterface           = Decoupled(UInt(32.W))
-  // val subRequest              = Decoupled(RoutingInfo(64, 48))
-  // val tag                     = Output(UInt(64.W))
-  //
   val retInterface            = Decoupled(UInt(64.W))
   val readyRequestInterface   = Decoupled(UInt(0.W))
   val readyQInterface         = Flipped(Decoupled(new ReadyPacket))
   val pmException             = Output(UInt(4.W))
 
-  // A module is the master of its `Decoupled(*)` interface
+  // A module is the master of its `Decoupled(*)` interfaces
   // and the slave of its Flipped(Decoupled(*)) interfaces
   val argsAndParentInfo         = Decoupled(new ArgsAndParentInfo)
   val taskInfo                  = Decoupled(new TaskInfo)
@@ -56,16 +51,14 @@ class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
         println(s"[DomainImp tileResetDomainChildren]: ${tileResetDomainChildren}")
 
         val rocketTileDelegate = tileResetDomainChildren.last.asInstanceOf[RocketTile].module.delegate
-
-        // TODO: Clear these deprecated signals
-        // delegate.tag := rocketTileDelegate.tag
-        // delegate.subQInterface <> rocketTileDelegate.subQInterface
-        // delegate.subRequest <> rocketTileDelegate.subRequest
         
-        delegate.pmException := rocketTileDelegate.pmException
         rocketTileDelegate.readyQInterface <> delegate.readyQInterface
         delegate.retInterface <> rocketTileDelegate.retInterface
         delegate.readyRequestInterface <> rocketTileDelegate.readyRequestInterface
+        delegate.taskInfo <> rocketTileDelegate.taskInfo
+        delegate.depInfo <> rocketTileDelegate.depInfo
+        delegate.argsAndParentInfo <> rocketTileDelegate.argsAndParentInfo
+        delegate.pmException := rocketTileDelegate.pmException
 
     } else if (wrapper.className == "TilePRCIDomain") {
         dontTouch(delegate)
@@ -82,21 +75,14 @@ class DomainImp(wrapper: Domain) extends LazyRawModuleImp(wrapper) {
         val rocketTileIOs = aop.Select.ios(wrapper.tile.module)
         val numIO = aop.Select.ios(wrapper.tile.module).length
         val rocketTileDelegate = rocketTileIOs(numIO - 1)
-
-        // TODO: Clear these deprecated signals
-        // delegate.tag := tileResetDomainDelegate.tag
-        // delegate.subQInterface <> tileResetDomainDelegate.subQInterface
-        // delegate.subRequest <> tileResetDomainDelegate.subRequest
         
-        delegate.pmException := tileResetDomainDelegate.pmException
         tileResetDomainDelegate.readyQInterface <> delegate.readyQInterface
         delegate.retInterface <> tileResetDomainDelegate.retInterface
         delegate.readyRequestInterface <> tileResetDomainDelegate.readyRequestInterface
-
-        //TODO: TEST IT
-        delegate.argsAndParentInfo <> tileResetDomainDelegate.argsAndParentInfo
         delegate.taskInfo <> tileResetDomainDelegate.taskInfo
         delegate.depInfo <> tileResetDomainDelegate.depInfo
+        delegate.argsAndParentInfo <> tileResetDomainDelegate.argsAndParentInfo
+        delegate.pmException := tileResetDomainDelegate.pmException
     }
 }
 
