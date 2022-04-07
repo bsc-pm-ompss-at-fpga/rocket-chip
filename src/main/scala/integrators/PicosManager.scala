@@ -1,6 +1,7 @@
 package freechips.rocketchip.integrators
 
 import Chisel._
+import chisel3.chiselTypeOf
 //import chisel3.iotesters._
 //import org.scalatest._
 import freechips.rocketchip.util.{InOrderArbiter, GuidedArbiter, RoutingInfo, DelayerAdapter, RRArbiterWithPrefixAndSuffix}
@@ -18,6 +19,11 @@ class ReadyPacket extends Bundle {
 
 object ReadyPacket {
 				def apply() = new ReadyPacket
+}
+
+object GetTaskIDType {
+	//def apply() = chiselTypeOf((new TaskInfo).task_id)
+	def apply() = UInt(64.W)
 }
 
 trait HasDest extends Bundle{
@@ -114,7 +120,7 @@ class DependenceInfoAdapter[T <: Data](typ: T = UInt(64.W)) extends Module {
 }
 
 trait HasSWID extends Bundle {
-				val swID											= Decoupled(UInt(64.W))
+				val swID											= Decoupled(GetTaskIDType())
 }
 
 trait HasInnerRoutingInfo extends Bundle {
@@ -294,6 +300,8 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 				val taskInfoBuffer = Module(new Queue(new TaskInfo, 2))
 				val depInfoBuffer = Module(new Queue(Vec(2, new DepInfo), 2))
 				val argsAndParentInfoBuffer = Module(new Queue(new ArgsAndParentInfo, 2))
+				//val swIDQueue = Module(new Queue(UInt(64.W), 2))
+				val swIDQueue = Module(new Queue(GetTaskIDType(), 2))
 
 				taskInfoBuffer.io.enq <> io.taskInfo
 				depInfoBuffer.io.enq <> io.depInfo
