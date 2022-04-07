@@ -16,7 +16,7 @@ class DepInfo extends Bundle {
 }
 
 class TaskInfo extends Bundle {
-  val task_id = Bits(32.W)
+  val task_id = Bits(64.W)
   val num_deps = Bits(4.W)
 }
 
