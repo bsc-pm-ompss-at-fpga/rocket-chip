@@ -83,6 +83,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   // TODO: Implement once we start supporting nesting
   val checkPacket1 = (c: DecoupledIO[UInt], parentID: Long) => {
     c.valid.expect(true.B)
+    c.bits.expect(parentID.U)
   }
 
   val checkPacket2 = (c: DecoupledIO[UInt]) => {
@@ -396,7 +397,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
               c.clock.step()
 
-            checkPacket2(c.io.picosSubData, testNanosID)
+            checkPacket2(c.io.picosSubData)
 
               c.clock.step()
 
@@ -536,7 +537,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           c.io.picosSubMaster.ready.poke(true.B)
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
 
-        checkPacket2(c.io.picosSubMaster, testNanosID)
+        checkPacket2(c.io.picosSubMaster)
         c.io.dest.expect(testDest.U)
 
         var j = 0
@@ -667,13 +668,16 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
 
         c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
 
-          waitRandomAmountOfCycles(c)
-
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.valid.expect(false.B)
 
           waitRandomAmountOfCycles(c)
 
+        c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.valid.expect(true.B)
         c.io.picosSubData.ready.poke(true.B)
@@ -687,6 +691,9 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.picosSubData.ready.poke(false.B)
 
           waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
 
         c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
@@ -703,12 +710,23 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
           waitRandomAmountOfCycles(c)
 
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
+
         c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
         c.io.picosSubData.ready.poke(true.B)
 
         checkPacket2(c.io.picosSubData)
         checkPayloadArgsAddingInnerRoutingPacket(testedNumArgs)
+        
+        // The following lines ensure that one packet is consumed
+        // from each of these interfaces at the end of each header
+        // generation cycle
+        c.io.taskInfo.valid.expect(true.B)
+        c.io.taskInfo.ready.expect(true.B)
+        c.io.argsAndParentInfo.valid.expect(true.B)
+        c.io.argsAndParentInfo.ready.expect(true.B)
 
           c.clock.step()
 
