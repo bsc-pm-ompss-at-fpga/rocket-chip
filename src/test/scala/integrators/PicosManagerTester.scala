@@ -673,14 +673,18 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
         c.io.routingInfo.ready.poke(false.B)
         c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.swID.ready.poke(false.B)
         c.io.picosSubData.valid.expect(false.B)
 
           waitRandomAmountOfCycles(c)
 
         c.io.routingInfo.ready.poke(true.B)
         c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.valid.expect(true.B)
         c.io.picosSubData.ready.poke(true.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+        c.io.swID.ready.poke(true.B)
+        c.io.picosSubData.valid.expect(true.B)
 
         checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
 
@@ -689,6 +693,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.routingInfo.ready.poke(false.B)
         c.io.routingInfoOuter.ready.poke(false.B)
         c.io.picosSubData.ready.poke(false.B)
+        c.io.swID.ready.poke(false.B)
 
           waitRandomAmountOfCycles(c)
 

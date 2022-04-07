@@ -152,6 +152,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				val payloadInnerRoutingPacketWasSent = RegInit(false.B)
 				val argsAddingInnerRoutingPacketWasSent = RegInit(false.B)
 				val outerRoutingPacketWasSent = RegInit(false.B)
+				val swIDPacketWasSent = RegInit(false.B)
 
 				io.argsAndParentInfo.ready := false.B
 				io.taskInfo.ready := false.B
@@ -178,7 +179,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					// Any module instantiating this one must make sure that this packet
 					// is fetched in the first cycle that it becomes available, since
 					// this state machine will not wait for this transaction to fire.
-					io.swID.valid := true.B
+					io.swID.valid := io.taskInfo.valid
 					io.swID.bits := nanosID
 
 					io.routingInfoOuter.valid := io.taskInfo.valid && !outerRoutingPacketWasSent
@@ -200,7 +201,14 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					// the header inner routing packet is sent to the leaf
 					// core-specific submission GuidedArbiter and the outer
 					// routing packet is sent to the master submission GuidedArbiter
-					io.picosSubData.valid := io.taskInfo.valid && io.argsAndParentInfo.valid && (io.routingInfo.fire() || headerInnerRoutingPacketWasSent) && (io.routingInfoOuter.fire() || outerRoutingPacketWasSent)
+
+					io.picosSubData.valid := (
+						io.taskInfo.valid
+						&& io.argsAndParentInfo.valid
+						&& (io.routingInfo.fire() || headerInnerRoutingPacketWasSent)
+						&& (io.routingInfoOuter.fire() || outerRoutingPacketWasSent)
+						&& (io.swID.fire() || swIDPacketWasSent)
+					)
 
 					when (io.routingInfo.fire()) {
 						headerInnerRoutingPacketWasSent := true.B
@@ -208,6 +216,10 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 
 					when (io.routingInfoOuter.fire()) {
 						outerRoutingPacketWasSent := true.B
+					}
+
+					when (io.swID.fire()) {
+						swIDPacketWasSent := true.B
 					}
 				}
 				is (1.U) {
@@ -258,6 +270,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 						payloadInnerRoutingPacketWasSent := false.B
 						argsAddingInnerRoutingPacketWasSent := false.B
 						outerRoutingPacketWasSent := false.B
+						swIDPacketWasSent := false.B
 						taskNumberCounter := taskNumberCounter + 1.U
 					} .otherwise {
 						counter := counter + 1.U
