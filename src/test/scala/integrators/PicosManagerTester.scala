@@ -38,10 +38,22 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       c.bits.task_id.poke(nanosID.U)
   }
 
+  val placeArgsAndParentInfo = (c: DecoupledIO[ArgsAndParentInfo], numArgs: Int, parentID: Long) => {
+      c.valid.poke(true.B)
+      c.bits.num_args.poke(numArgs.U)
+      c.bits.parent_id.poke(parentID.U)
+  }
+
   val unplaceTaskInfo = (c: DecoupledIO[TaskInfo]) => {
       c.valid.poke(false.B)
       c.bits.num_deps.poke(0.U)
       c.bits.task_id.poke(0.U)
+  }
+
+  val unplaceArgsAndParentInfo = (c: DecoupledIO[ArgsAndParentInfo]) => {
+      c.valid.poke(false.B)
+      c.bits.num_args.poke(0.U)
+      c.bits.parent_id.poke(0.U)
   }
 
   val placeDepInfo = (c: DecoupledIO[Vec[DepInfo]], pointer0: Long, kind0: Int, pointer1: Long, kind1: Int) => {
@@ -73,7 +85,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     c.valid.expect(true.B)
   }
 
-  val checkPacket2 = (c: DecoupledIO[UInt], nanosID: Long) => {
+  val checkPacket2 = (c: DecoupledIO[UInt]) => {
     val FPGA_MASK = 0x1
     val RUN_ON_ANY_ACCELERATOR_MASK = 0xff
 
@@ -82,7 +94,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     //println(toHexString(picosSubPacket))
     assert(((picosSubPacket >> 32) & 0x3) == FPGA_MASK)
     assert(((picosSubPacket >> 40) & 0xff) == RUN_ON_ANY_ACCELERATOR_MASK)
-    assert((picosSubPacket & 0xffffffffL) == nanosID)
+    assert((picosSubPacket & 0xffffffffL) == 0)
   }
 
   val setAckSignal = (c: PicosFifoBundle[UInt]) => {
@@ -117,6 +129,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
   }
 
+  /*
 	behavior of "ReadyPacketExtractor"
   it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
     test(new ReadyPacketExtractor(numTestedCores)) { c =>
@@ -246,102 +259,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         //println(answer)
         assert(interpretedInput == answer)
       } 
-    }
-  }
-
-	behavior of "SubmissionHeaderGenerator"
-  it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
-    test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
-      val checkHeaderInnerRoutingPacket = () => {
-        c.io.routingInfo.valid.expect(true.B)
-        c.io.routingInfo.bits.arbID.expect(0.U)
-        c.io.routingInfo.bits.numPackets.expect(3.U)
-      }
-
-      val checkPayloadInnerRoutingPacket = (numDeps: Int, numArgs: Int) => {
-        c.io.routingInfo.valid.expect(true.B)
-        c.io.routingInfo.bits.arbID.expect(1.U)
-        c.io.routingInfo.bits.numPackets.expect((numDeps + numArgs).U)
-      }
-
-      val checkOuterRoutingPacket = (coreID: Int, numDeps: Int, numArgs: Int) => {
-        c.io.routingInfoOuter.valid.expect(true.B)
-        c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
-        c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
-      }
-
-      val testedCoreID = (numTestedCores + 2) % numTestedCores 
-      
-      c.io.coreID.poke(testedCoreID.U)
-
-      for (i <- 0 until 100) {
-        //println("Running iteration " + i)
-        val testedTaskNumber = i + 1
-        val testedNumDeps = r.nextInt(16)
-        val testedParentID = r.nextLong() & 0xffffffffL
-        val testedNanosID = r.nextLong() & 0xffffffffL
-        val testedNumArgs = 0
-
-        placeTaskInfo(c.io.taskInfo, testedNumDeps, testedNanosID)
-        c.io.picosSubData.valid.expect(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        checkHeaderInnerRoutingPacket()
-        checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
-
-        c.io.routingInfo.ready.poke(true.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.picosSubData.valid.expect(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.valid.expect(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-
-        checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
-
-          c.clock.step()
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-        c.io.picosSubData.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-
-        checkPacket1(c.io.picosSubData, testedParentID)
-        checkPayloadInnerRoutingPacket(testedNumDeps, testedNumArgs)
-
-          c.clock.step()
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-        c.io.picosSubData.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-
-        checkPacket2(c.io.picosSubData, testedNanosID)
-
-          c.clock.step()
-
-        unplaceTaskInfo(c.io.taskInfo)
-        c.io.picosSubData.ready.poke(false.B)
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-      }
     }
   }
 	behavior of "DependenceInfoAdapter"
@@ -696,6 +613,112 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         }
         unplaceDepInfo(c.io.depInfoVec(testCoreID))
         c.io.picosSubMaster.ready.poke(false.B)
+      }
+    }
+  }
+  */
+
+	behavior of "SubmissionHeaderGenerator"
+  it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
+    test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
+      val checkHeaderInnerRoutingPacket = () => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(0.U)
+        c.io.routingInfo.bits.numPackets.expect(3.U)
+      }
+
+      val checkPayloadInnerRoutingPacket = (numDeps: Int) => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(1.U)
+        c.io.routingInfo.bits.numPackets.expect((numDeps).U)
+      }
+
+      val checkPayloadArgsAddingInnerRoutingPacket = (numArgs: Int) => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(2.U)
+        c.io.routingInfo.bits.numPackets.expect((numArgs + 1).U)
+      }
+
+      val checkOuterRoutingPacket = (coreID: Int, numDeps: Int, numArgs: Int) => {
+        c.io.routingInfoOuter.valid.expect(true.B)
+        c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
+        c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs + 1).U)
+      }
+
+      val testedCoreID = (numTestedCores + 2) % numTestedCores 
+      
+      c.io.coreID.poke(testedCoreID.U)
+
+      for (i <- 0 until 100) {
+        //println("Running iteration " + i)
+        val testedTaskNumber = i + 1
+        val testedNumDeps = r.nextInt(16)
+        val testedParentID = r.nextLong() & 0xffffffffL
+        val testedNanosID = r.nextLong() & 0xffffffffL
+        val testedNumArgs = r.nextInt(15)
+
+        placeTaskInfo(c.io.taskInfo, testedNumDeps, testedNanosID)
+        placeArgsAndParentInfo(c.io.argsAndParentInfo, testedNumArgs, testedParentID)
+        c.io.picosSubData.valid.expect(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        checkHeaderInnerRoutingPacket()
+        checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
+
+        c.io.routingInfo.ready.poke(true.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.picosSubData.valid.expect(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.valid.expect(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+
+        checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
+
+          c.clock.step()
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+
+        checkPacket1(c.io.picosSubData, testedParentID)
+        checkPayloadInnerRoutingPacket(testedNumDeps)
+
+          c.clock.step()
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+
+        checkPacket2(c.io.picosSubData)
+        checkPayloadArgsAddingInnerRoutingPacket(testedNumArgs)
+
+          c.clock.step()
+
+        unplaceTaskInfo(c.io.taskInfo)
+        unplaceArgsAndParentInfo(c.io.argsAndParentInfo)
+        c.io.picosSubData.ready.poke(false.B)
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
       }
     }
   }
