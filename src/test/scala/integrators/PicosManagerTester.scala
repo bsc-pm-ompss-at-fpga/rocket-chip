@@ -26,7 +26,8 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   val maxTID = 255
 
 	val r = new scala.util.Random()
-	r.setSeed(1000)
+	//r.setSeed(1000)
+	r.setSeed(100)
 
   val toHexString = (num : BigInt) => {
     f"${num}%X"
@@ -98,6 +99,17 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     assert((picosSubPacket & 0xffffffffL) == 0)
   }
 
+  val checkSWIDPacket = (c: DecoupledIO[UInt], nanosID: Long) => {
+    // THE SCALA COMPILER SEEMS TO BE ABLE TO
+    // CHANGE THE ORDER OF EXPECT AND ASSERT
+    // STATEMENTS! WATCH OUT!
+    c.valid.expect(true.B)
+    val picosSubPacket = c.bits.peek().litValue
+
+    c.bits.expect(nanosID.U)
+    //assert(picosSubPacket == nanosID)
+  }
+
   val setAckSignal = (c: PicosFifoBundle[UInt]) => {
     c.valid.poke(true.B)
     c.data.poke(1.U)
@@ -127,7 +139,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   val checkOuterRoutingPacket = (c: CoreSpecificSubmissionHandler[UInt], coreID: Int, numDeps: Int, numArgs: Int) => {
     c.io.routingInfoOuter.valid.expect(true.B)
     c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
-    c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs).U)
+    c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs + 1).U)
   }
 
   /*
@@ -344,132 +356,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
   }
 
-	behavior of "CoreSpecificSubmissionHandler"
-  it should "produce a valid header sequence" in {
-      test(new CoreSpecificSubmissionHandler(numTestedCores, 33)) { c =>
-          val testCoreID = 7
-
-          for (i <- 0 until 100) {
-            val testNumArgs = 0
-            val testTaskID = 1332341342L
-            val testTaskNumber = i + 1
-
-            val testNumDeps = r.nextInt(16)
-            val testParentID = r.nextLong() & 0xffffffffL
-            val testNanosID = r.nextLong() & 0xffffffffL
-
-            val INVALID_TYPE = 0
-            val IN_TYPE = 1
-            val OUT_TYPE = 2
-            val INOUT_TYPE = 3
-
-            //println(f"Iteration: $i")
-
-            c.io.coreID.poke(testCoreID.U)
-            c.io.routingInfoOuter.valid.expect(false.B)
-
-            c.io.routingInfoOuter.ready.poke(true.B)
-            c.io.picosSubData.ready.poke(true.B)
-
-            placeTaskInfo(c.io.taskInfo, testNumDeps, testNanosID)
-              c.clock.step()
-            unplaceTaskInfo(c.io.taskInfo)
-            c.io.routingInfoOuter.valid.expect(true.B)
-            
-            checkOuterRoutingPacket(c, testCoreID, testNumDeps, testNumArgs)
-
-            // The leaf GuidedArbiter has not processed the routing packet
-            // that allows submission header packets to go through, so
-            // the following interface should not hold any valid data
-            c.io.picosSubData.valid.expect(false.B)
-
-              c.clock.step()
-              c.clock.step()
-
-            checkPacket0(c.io.picosSubData, testNumDeps, testTaskNumber)
-
-              c.clock.step()
-
-            // TODO: For the following to work, we'll need to allow
-            //       CoreSpecificSubmissionHandler to buffer at least
-            //       one routing packet for the leaf GuidedArbiter
-            checkPacket1(c.io.picosSubData, testParentID)
-
-              c.clock.step()
-
-            checkPacket2(c.io.picosSubData)
-
-              c.clock.step()
-
-              // One extra step is needed because the routing packet
-              // for the payload section takes one cycle to be fetched
-              c.clock.step()
-
-              waitRandomAmountOfCycles(c)
-
-            var j = 0
-            var tries = 0
-            var max_tries = 100
-            while (j < testNumDeps) {
-              val testDepPointer0 = r.nextLong() & 0xffffffffffffffL
-              val testDepKind0 = r.nextInt(3) + 1
-              val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
-              val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
-
-              //println("Dep #" + j)
-              j += 1
-
-              placeDepInfo(c.io.depInfo, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
-                c.clock.step()
-              unplaceDepInfo(c.io.depInfo)
-
-              tries = 0
-              while (tries < max_tries) {
-                if (c.io.picosSubData.valid.peek().litToBoolean) {
-                  tries = max_tries + 1
-                } else {
-                  tries += 1
-                  c.clock.step()
-                }
-              }
-              assert(tries != max_tries)
-
-              //c.io.picosSubData.valid.expect(true.B)
-              c.io.picosSubData.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
-
-                c.clock.step()
-
-              if (testDepKind1 != 0) {
-                //println("Dep #" + j)
-                j += 1
-
-                tries = 0
-                while (tries < max_tries) {
-                  if (c.io.picosSubData.valid.peek().litToBoolean) {
-                    tries = max_tries + 1
-                  } else {
-                    tries += 1
-                    c.clock.step()
-                  }
-                }
-                assert(tries != max_tries)
-                c.io.picosSubData.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
-
-                  c.clock.step()
-              }
-
-
-                waitRandomAmountOfCycles(c)
-            }
-            unplaceDepInfo(c.io.depInfo)
-            c.io.routingInfoOuter.ready.poke(false.B)
-            c.io.picosSubData.ready.poke(false.B)
-
-              waitRandomAmountOfCycles(c)
-          }
-      }
-  }
-
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
     test(new SubmissionHandler(numTestedCores)) { c =>
@@ -617,7 +503,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-  */
 
 	behavior of "SubmissionHeaderGenerator"
   it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
@@ -689,6 +574,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
 
           c.clock.step()
+        c.io.swID.ready.poke(false.B)
 
         c.io.routingInfo.ready.poke(false.B)
         c.io.routingInfoOuter.ready.poke(false.B)
@@ -744,5 +630,167 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           waitRandomAmountOfCycles(c)
       }
     }
+  }
+  */
+
+	behavior of "CoreSpecificSubmissionHandler"
+  it should "produce a valid header sequence" in {
+      test(new CoreSpecificSubmissionHandler(numTestedCores, 33)) { c =>
+          val testCoreID = 7
+
+          for (i <- 0 until 100) {
+            // TODO: Change this once we implement user-provided
+            //       argument passing
+            val testNumArgs = 0
+            val testTaskNumber = i + 1
+
+            //val testNumDeps = r.nextInt(16)
+            val testNumDeps = r.nextInt(16)
+            val testParentID = r.nextLong() & 0xffffffffL
+            //val testNanosID = r.nextLong() & 0xffffffffL
+            val testNanosID = r.nextLong() & 0xffL
+            //val testNanosID = 0xdeadbeefL
+
+            val INVALID_TYPE = 0
+            val IN_TYPE = 1
+            val OUT_TYPE = 2
+            val INOUT_TYPE = 3
+
+            //println(f"Iteration: $i")
+
+            c.io.coreID.poke(testCoreID.U)
+            c.io.routingInfoOuter.valid.expect(false.B)
+
+            placeTaskInfo(c.io.taskInfo, testNumDeps, testNanosID)
+            placeArgsAndParentInfo(c.io.argsAndParentInfo, testNumArgs, testParentID)
+            c.io.taskInfo.ready.expect(true.B)
+            c.io.depInfo.ready.expect(true.B)
+              c.clock.step()
+            unplaceTaskInfo(c.io.taskInfo)
+            unplaceArgsAndParentInfo(c.io.argsAndParentInfo)
+            c.io.routingInfoOuter.valid.expect(true.B)
+            
+            checkOuterRoutingPacket(c, testCoreID, testNumDeps, testNumArgs)
+
+            // The leaf GuidedArbiter has not processed the routing packet
+            // that allows submission header packets to go through, so
+            // the following interface should not hold any valid data
+            c.io.picosSubData.valid.expect(false.B)
+
+            c.io.routingInfoOuter.ready.poke(true.B)
+              c.clock.step()
+            c.io.routingInfoOuter.ready.poke(false.B)
+
+              c.clock.step()
+
+            checkPacket0(c.io.picosSubData, testNumDeps, testTaskNumber)
+
+            c.io.picosSubData.ready.poke(true.B)
+              c.clock.step()
+            c.io.picosSubData.ready.poke(false.B)
+
+            // TODO: For the following to work, we'll need to allow
+            //       CoreSpecificSubmissionHandler to buffer at least
+            //       one routing packet for the leaf GuidedArbiter
+            checkPacket1(c.io.picosSubData, testParentID)
+
+            c.io.picosSubData.ready.poke(true.B)
+              c.clock.step()
+            c.io.picosSubData.ready.poke(false.B)
+
+            checkPacket2(c.io.picosSubData)
+
+            c.io.picosSubData.ready.poke(true.B)
+              c.clock.step()
+            c.io.picosSubData.ready.poke(false.B)
+
+              // One extra step is needed because the routing packet
+              // for the payload section takes one cycle to be fetched
+              c.clock.step()
+
+              waitRandomAmountOfCycles(c)
+
+            var j = 0
+            var tries = 0
+            var max_tries = 100
+            //println(f"Num deps: $testNumDeps")
+            while (j < testNumDeps) {
+              val testDepPointer0 = r.nextLong() & 0xffffffffffffffL
+              val testDepKind0 = r.nextInt(3) + 1
+              val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
+              val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
+
+              //println(f"Pushed dependencies: (${testDepPointer0.toHexString}, ${testDepPointer1.toHexString})")
+
+              //println("Dep #" + j)
+              j += 1
+
+              placeDepInfo(c.io.depInfo, testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
+              c.io.depInfo.ready.expect(true.B)
+                c.clock.step()
+              unplaceDepInfo(c.io.depInfo)
+
+              tries = 0
+              while (tries < max_tries) {
+                if (c.io.picosSubData.valid.peek().litToBoolean) {
+                  tries = max_tries + 1
+                } else {
+                  tries += 1
+                  c.clock.step()
+                }
+              }
+              assert(tries != max_tries)
+
+              //println(f"Fetched packet: ${toHexString(c.io.picosSubData.bits.peek().litValue)}")
+              c.io.picosSubData.bits.expect((BigInt(testDepKind0) << 58 | BigInt(testDepPointer0)).U(64.W))
+
+              c.io.picosSubData.ready.poke(true.B)
+                c.clock.step()
+              c.io.picosSubData.ready.poke(false.B)
+
+              if (testDepKind1 != 0) {
+                //println("Dep #" + j)
+                j += 1
+
+                tries = 0
+                while (tries < max_tries) {
+                  if (c.io.picosSubData.valid.peek().litToBoolean) {
+                    tries = max_tries + 1
+                  } else {
+                    tries += 1
+                    c.clock.step()
+                  }
+                }
+                assert(tries != max_tries)
+                //println(f"Fetched packet: ${toHexString(c.io.picosSubData.bits.peek().litValue)}")
+                c.io.picosSubData.bits.expect((BigInt(testDepKind1) << 58 | BigInt(testDepPointer1)).U(64.W))
+
+                c.io.picosSubData.ready.poke(true.B)
+                  c.clock.step()
+                c.io.picosSubData.ready.poke(false.B)
+              }
+
+                waitRandomAmountOfCycles(c)
+            }
+
+              tries = 0
+              while (tries < max_tries) {
+                if (c.io.picosSubData.valid.peek().litToBoolean) {
+                  tries = max_tries + 1
+                } else {
+                  tries += 1
+                  c.clock.step()
+                }
+              }
+              assert(tries != max_tries)
+              checkSWIDPacket(c.io.picosSubData, testNanosID)
+              //println(f"Fetched swID packet: ${toHexString(c.io.picosSubData.bits.peek().litValue)}")
+              c.io.picosSubData.ready.poke(true.B)
+                  c.clock.step()
+              c.io.picosSubData.ready.poke(false.B)
+
+              waitRandomAmountOfCycles(c)
+          }
+      }
   }
 }
