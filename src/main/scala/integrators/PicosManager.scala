@@ -185,7 +185,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					// Any module instantiating this one must make sure that this packet
 					// is fetched in the first cycle that it becomes available, since
 					// this state machine will not wait for this transaction to fire.
-					io.swID.valid := io.taskInfo.valid
+					io.swID.valid := io.taskInfo.valid && !swIDPacketWasSent
 					io.swID.bits := nanosID
 
 					io.routingInfoOuter.valid := io.taskInfo.valid && !outerRoutingPacketWasSent
@@ -284,14 +284,18 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				}
 }
 
+trait HasRoutingInfoMonitors extends Bundle {
+				val routingInfo								= Decoupled((new RoutingInfo(3, 3 + 15 + 15)))
+}
+
 class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: Int = 33, typ: T = UInt(64.W)) extends Module {
-				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ.cloneType) with HasDepInfo)
+				val io = IO(new SubmissionHeaderGeneratorIO(nCores, typ.cloneType) with HasDepInfo with HasRoutingInfoMonitors)
 
 				val downtimeBetweenSubmissions = 0
 
 				val headerGenerator = Module(new SubmissionHeaderGenerator(nCores))
 				val dependenceInfoAdapter = Module(new DependenceInfoAdapter)
-				val leafGuidedArbiter = Module(new GuidedArbiter(typ.cloneType, 2, maxSequenceLength, downtimeBetweenSubmissions))
+				val leafGuidedArbiter = Module(new GuidedArbiter(typ.cloneType, 3, maxSequenceLength, downtimeBetweenSubmissions))
 
 				// [TO BE CONFIRMED] Making the size of this queue lower than 3 might
 				// cause `SubmissionHeaderGenerator` to pause more frequently
@@ -300,20 +304,22 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 				val taskInfoBuffer = Module(new Queue(new TaskInfo, 2))
 				val depInfoBuffer = Module(new Queue(Vec(2, new DepInfo), 2))
 				val argsAndParentInfoBuffer = Module(new Queue(new ArgsAndParentInfo, 2))
-				//val swIDQueue = Module(new Queue(UInt(64.W), 2))
 				val swIDQueue = Module(new Queue(GetTaskIDType(), 2))
 
 				taskInfoBuffer.io.enq <> io.taskInfo
 				depInfoBuffer.io.enq <> io.depInfo
 				argsAndParentInfoBuffer.io.enq <> io.argsAndParentInfo
 
+				io.routingInfo.valid := headerGenerator.io.routingInfo.valid
+				io.routingInfo.bits := headerGenerator.io.routingInfo.bits
+
 				headerGenerator.io.coreID := io.coreID
 				headerGenerator.io.argsAndParentInfo <> argsAndParentInfoBuffer.io.deq
 				headerGenerator.io.taskInfo <> taskInfoBuffer.io.deq
 				headerGenerator.io.suggestedTaskNumber := io.suggestedTaskNumber
-				io.routingInfoOuter := headerGenerator.io.routingInfoOuter
+				swIDQueue.io.enq <> headerGenerator.io.swID
+				io.routingInfoOuter <> headerGenerator.io.routingInfoOuter
 
-				//dependenceInfoAdapter.io.depInfo <> depInfoBuffer.io.deq
 				dependenceInfoAdapter.io.depInfo <> depInfoBuffer.io.deq
 
 				// TODO: Check whether it would make sense
@@ -324,6 +330,7 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 				leafGuidedArbiter.io.routingInfo <> leafRoutingPacketsQueue.io.deq
 				leafGuidedArbiter.io.in(0) <> headerGenerator.io.picosSubData
 				leafGuidedArbiter.io.in(1) <> dependenceInfoAdapter.io.picosSubData
+				leafGuidedArbiter.io.in(2) <> swIDQueue.io.deq
 				io.picosSubData <> leafGuidedArbiter.io.out
 }
 
