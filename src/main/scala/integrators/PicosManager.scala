@@ -383,7 +383,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 					taskNumberCounter := taskNumberCounter + 1.U
 
 					val numPacketsToRoute = routingArbiter.io.out.bits.numPackets
-					destReg := Mux(numPacketsToRoute === 3.U, 3.U, 2.U)
+					destReg := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
 				}
 
 				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
