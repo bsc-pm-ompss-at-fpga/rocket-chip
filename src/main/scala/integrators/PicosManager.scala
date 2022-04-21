@@ -13,7 +13,7 @@ import picos_v4_integration_elements.{ArgsAndParentInfo, DepInfo, TaskInfo}
 import freechips.rocketchip.tile.{BlankConfig}
 
 class ReadyPacket extends Bundle {
-				val nanosID                     = UInt(32.W)
+				val nanosID                     = UInt(64.W)
 				val picosID                     = UInt(64.W)
 }
 
@@ -167,9 +167,11 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				io.swID.valid := false.B
 
 				val numDeps = io.taskInfo.bits.num_deps
-				val numArgs = io.argsAndParentInfo.bits.num_args
+				val numArgs = io.argsAndParentInfo.bits.num_args + 1.U
 				val nanosID = io.taskInfo.bits.task_id
 				val sixZeros = 0.U(6.W)
+				val fourZeros = 0.U(4.W)
+				val eightZeros = 0.U(8.W)
 				val twelveZeros = 0.U(12.W)
 				val sixteenZeros = 0.U(16.W)
 				val thirtyTwoZeros = 0.U(32.W)
@@ -195,12 +197,12 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					//
 					// Also, we add the constant `1.U` here because we are prefixing the argument
 					// sequence to requested by the software layer with a packet encoding the `swID`
-					io.routingInfoOuter.bits.numPackets := (3 + 1).U(6.W) + numDeps + numArgs
+					io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
 					when (io.suggestedTaskNumber =/= 0.U) {
-						io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, numArgs, twelveZeros))
+						io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
 					} .otherwise {
-						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, numArgs, twelveZeros))
+						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
 					}
 
 					// The following ensures we do not leave this state before
@@ -247,7 +249,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				is (2.U) {
 					io.routingInfo.valid := io.argsAndParentInfo.valid && !argsAddingInnerRoutingPacketWasSent
 					io.routingInfo.bits.arbID := 2.U
-					io.routingInfo.bits.numPackets := 1.U(6.W) + numArgs
+					io.routingInfo.bits.numPackets := numArgs
 
 					io.picosSubData.bits := Cat(Seq(sixteenZeros, "hff".U(8.W), sixZeros, 1.U(2.W), thirtyTwoZeros))
 
@@ -332,6 +334,78 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 				leafGuidedArbiter.io.in(1) <> dependenceInfoAdapter.io.picosSubData
 				leafGuidedArbiter.io.in(2) <> swIDQueue.io.deq
 				io.picosSubData <> leafGuidedArbiter.io.out
+}
+
+class ResubmissionHandlerIO[T <: Data](typ: T = UInt(64.W)) extends Bundle with HasDest {
+				val rawPackets        = Flipped(Decoupled(typ.cloneType))
+				val picosAckInterface = Flipped(new PicosFifoBundle(UInt(2.W)))
+				val lastIn            = Bool().asInput
+				val destIn						= UInt(3.W).asInput
+
+				val picosSubMaster    = Decoupled(typ.cloneType)
+				val readyForNewTasks  = Bool().asOutput
+				val lastOut           = Bool().asOutput
+}
+
+class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 + 15 + 15) extends Module {
+				val io                       = IO(new ResubmissionHandlerIO(typ.cloneType))
+
+				val packetMem                = Mem(maxSeqLength, typ.cloneType)
+				val writeCounter             = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = 0.U)
+				val readCounter              = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = 0.U)
+				val lastID                   = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = (maxSeqLength + 1).U)
+				val activeDest                = Reg(t = UInt(3.W), init = 0.U)
+
+				val awaitingAcknowledgement  = RegInit(false.B)
+				val awaitingResubmission     = RegInit(false.B)
+
+				io.readyForNewTasks         := !awaitingAcknowledgement && !awaitingResubmission
+
+				io.picosAckInterface.empty  := awaitingAcknowledgement
+				when (awaitingAcknowledgement) {
+					when (io.picosAckInterface.valid) {
+						awaitingAcknowledgement := false.B
+
+						when (io.picosAckInterface.data === 0.U) {
+							awaitingResubmission := true.B
+							readCounter := 0.U
+						} .otherwise {
+							awaitingResubmission := false.B
+							lastID := (maxSeqLength + 1).U
+							activeDest := 0.U
+							writeCounter := 0.U
+							readCounter := 0.U
+						}
+					}
+				} .otherwise {
+					awaitingAcknowledgement   := io.lastOut || (io.lastIn && io.rawPackets.fire())
+				}
+
+				io.picosSubMaster.valid := writeCounter > readCounter
+				io.picosSubMaster.bits := packetMem.read(readCounter)
+
+				io.lastOut := (readCounter === lastID) && (io.picosSubMaster.valid)
+
+				io.dest := activeDest
+
+				when (io.picosSubMaster.fire()) {
+					readCounter := readCounter + 1.U
+				}
+
+				io.rawPackets.ready := io.readyForNewTasks
+
+				when (io.rawPackets.fire()) {
+					when (io.lastIn) {
+						lastID := writeCounter
+					}
+
+					when (writeCounter === 0.U) {
+						activeDest := io.destIn
+					}
+
+					packetMem.write(writeCounter, io.rawPackets.bits)
+					writeCounter := writeCounter + 1.U
+				}
 }
 
 class SubmissionHandlerIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Bundle with HasDest {
@@ -439,18 +513,18 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 	val wf_picosID = RegEnable(Cat(picosReadyInterfaceTID, picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
 	val wf_parentID = RegEnable(picosReadyInterfaceBits, wf_counter === 2.U)
 
-	val canProceed = picosReadyInterfaceNotEmpty && (wf_counter < 3.U || roccReadyQueue.io.enq.fire())
-
-	readyPacket.nanosID := picosReadyInterfaceBits(31, 0)
+	readyPacket.nanosID := picosReadyInterfaceBits
 	readyPacket.picosID := wf_picosID
 
-	roccReadyQueue.io.enq.valid := (wf_counter === 3.U) && picosReadyInterfacePop && picosReadyInterfaceNotEmpty
+	roccReadyQueue.io.enq.valid := (wf_counter === 4.U) && picosReadyInterfacePop
 	// TODO: Check whether the following line makes sense
 	roccReadyQueue.io.enq.bits := readyPacket
 	picosReadyInterfacePop := picosReadyInterfaceNotEmpty && roccReadyQueue.io.enq.ready
 
+	val canProceed = picosReadyInterfacePop
+
 	when (canProceed) {
-		when (wf_counter < 3.U) {
+		when (wf_counter < 4.U) {
 			wf_counter := wf_counter + 1.U 
 		} .otherwise {
 			wf_counter := 0.U

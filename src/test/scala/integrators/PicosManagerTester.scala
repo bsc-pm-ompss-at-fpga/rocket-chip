@@ -27,7 +27,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
 	val r = new scala.util.Random()
 	//r.setSeed(1000)
-	r.setSeed(100)
+	r.setSeed(10)
 
   val toHexString = (num : BigInt) => {
     f"${num}%X"
@@ -73,10 +73,19 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       c.bits(1).kind.poke(0.U)
   }
 
-  val checkPacket0 = (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long) => {
+  def checkPacket0 (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long, rawNumArgs: Int, addIDArg: Boolean = true) {
     c.valid.expect(true.B)
     val picosSubPacket = c.bits.peek().litValue
-    //println(toHexString(picosSubPacket))
+    
+    var numArgs = rawNumArgs
+    if (addIDArg) {
+      numArgs = rawNumArgs + 1
+    }
+
+    println(s"Required number of deps, arguments: $numDeps, $numArgs")
+    println(toHexString(picosSubPacket))
+
+    assert(((picosSubPacket >> 8) & 0xf) == numArgs)
     assert(((picosSubPacket >> 16) & 0xf) == numDeps)
     assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
   }
@@ -142,137 +151,10 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
     c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs + 1).U)
   }
 
-	behavior of "ReadyPacketExtractor"
-  it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
-    test(new ReadyPacketExtractor(numTestedCores)) { c =>
-      def asUnsigned(unsignedLong: Long) =
-        (BigInt(unsignedLong >>> 1) << 1) + (unsignedLong & 1)
+  def asUnsigned(unsignedLong: Long) =
+    (BigInt(unsignedLong >>> 1) << 1) + (unsignedLong & 1)
 
-      val generateRandomInput = () => {
-        var inputList : ListBuffer[BigInt] = ListBuffer()
-        val sequenceLength = 4
-        
-        for (i <- 0 until sequenceLength) {
-          val newPacket = asUnsigned(nextLong().abs)
-          //println("newPacket: " + toHexString(newPacket))
-          inputList += newPacket
-        }
-        inputList
-      }
-
-      val sendReadyPacket = (testPacket : BigInt) => {
-        var tryAgain = false
-
-        do {
-          tryAgain = false
-          c.io.picosReadyInterface.valid.poke(true.B)
-          c.io.picosReadyInterface.data.payload.poke(testPacket.U)
-          if (c.io.picosReadyInterface.empty.peek().litToBoolean) {
-          } else {
-            tryAgain = true
-          }
-          c.clock.step()
-          c.io.picosReadyInterface.valid.poke(false.B)
-          c.io.picosReadyInterface.data.payload.poke(0.U)
-        } while (tryAgain)
-      }
-
-      val sendRoutingPacket = (coreID : Int) => {
-        var tryAgain = false
-
-        do {
-          tryAgain = false
-          c.io.readyRequestInterface(coreID).valid.poke(true.B)
-          if (c.io.readyRequestInterface(coreID).ready.peek().litToBoolean) {
-          } else {
-            tryAgain = true
-          }
-          c.clock.step()
-          c.io.readyRequestInterface(coreID).valid.poke(false.B)
-        } while (tryAgain)
-      }
-
-      val driveInputSequence = (inputSequence : ListBuffer[BigInt]) => {
-        inputSequence.foreach{ case el => 
-          sendReadyPacket(el)
-        }
-      }
-
-      class ReadyTaskInfo {
-        var numArgs: BigInt = 0
-        var picosID: BigInt = 0
-        var parentID: BigInt = 0
-        var nanosID: BigInt = 0
-        var tID: BigInt = 0
-
-        override def toString() : String = {
-          val baseList = List(numArgs, picosID, parentID, nanosID, tID)
-          val hexList = baseList.map(toHexString(_))
-          val innerString = hexList.foldRight("")(_ + ", " + _).dropRight(2)
-          return "(numArgs, picosID, parentID, nanosID, tID) = (" + innerString + ")"
-        }
-
-        override def equals(other: Any): Boolean = {
-          other match {
-            case other: ReadyTaskInfo => picosID == other.picosID && nanosID == other.nanosID && tID == other.tID
-            case _ => false
-          }
-        }
-      }
-
-      val interpretInput = (input: ListBuffer[BigInt]) => {
-        assert(input.size == 4)
-        var readyTask = new ReadyTaskInfo
-        readyTask.numArgs  = input(0) & 0xff00
-        readyTask.picosID  = input(1) & 0xffffffffL
-        readyTask.parentID = input(2)
-        readyTask.nanosID  = input(3) & 0xffffffffL
-
-        readyTask
-      }
-
-      val fetchAnswerForCore = (coreID : Int) => {
-        c.io.readyQInterface(coreID).ready.poke(true.B)
-        while (!c.io.readyQInterface(coreID).valid.peek().litToBoolean) {
-          c.clock.step()
-        }
-
-        var readyTask = new ReadyTaskInfo
-
-        val rawPicosID =  c.io.readyQInterface(coreID).bits.picosID.peek().litValue
-        val cleanPicosID = rawPicosID & 0xffffffffL
-        val tID = rawPicosID >> 32
-
-        readyTask.nanosID = c.io.readyQInterface(coreID).bits.nanosID.peek().litValue
-        readyTask.picosID = cleanPicosID
-        readyTask.tID = tID
-
-        c.clock.step()
-        c.io.readyQInterface(coreID).ready.poke(false.B)
-
-        readyTask
-      }
-
-      val numReadyTaskFetches = 10
-      for (i <- 0 until numReadyTaskFetches) {
-        val randomInputSequence = generateRandomInput()
-        val targetCore = i % numTestedCores
-        val interpretedInput = interpretInput(randomInputSequence)
-
-        val testedTID = r.nextInt(maxTID + 1)
-        interpretedInput.tID = testedTID
-
-        //println(interpretedInput)
-        setTID(c.io.picosReadyInterface, testedTID)
-        driveInputSequence(randomInputSequence)
-        
-        sendRoutingPacket(targetCore)
-        val answer = fetchAnswerForCore(targetCore)
-        //println(answer)
-        assert(interpretedInput == answer)
-      } 
-    }
-  }
+  /*
 	behavior of "DependenceInfoAdapter"
   it should "generate one Picos submission packet per depInfo packet whenever the second dependence is invalid" in {
       test(new DependenceInfoAdapter) { c =>
@@ -355,134 +237,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
   }
 
-	behavior of "SubmissionHeaderGenerator"
-  it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
-    test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
-      val checkHeaderInnerRoutingPacket = () => {
-        c.io.routingInfo.valid.expect(true.B)
-        c.io.routingInfo.bits.arbID.expect(0.U)
-        c.io.routingInfo.bits.numPackets.expect(3.U)
-      }
-
-      val checkPayloadInnerRoutingPacket = (numDeps: Int) => {
-        c.io.routingInfo.valid.expect(true.B)
-        c.io.routingInfo.bits.arbID.expect(1.U)
-        c.io.routingInfo.bits.numPackets.expect((numDeps).U)
-      }
-
-      val checkPayloadArgsAddingInnerRoutingPacket = (numArgs: Int) => {
-        c.io.routingInfo.valid.expect(true.B)
-        c.io.routingInfo.bits.arbID.expect(2.U)
-        c.io.routingInfo.bits.numPackets.expect((numArgs + 1).U)
-      }
-
-      val checkOuterRoutingPacket = (coreID: Int, numDeps: Int, numArgs: Int) => {
-        c.io.routingInfoOuter.valid.expect(true.B)
-        c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
-        c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs + 1).U)
-      }
-
-      val testedCoreID = (numTestedCores + 2) % numTestedCores 
-      
-      c.io.coreID.poke(testedCoreID.U)
-
-      for (i <- 0 until 100) {
-        //println("Running iteration " + i)
-        val testedTaskNumber = i + 1
-        val testedNumDeps = r.nextInt(16)
-        val testedParentID = r.nextLong() & 0xffffffffL
-        val testedNanosID = r.nextLong() & 0xffffffffL
-        val testedNumArgs = r.nextInt(15)
-
-        placeTaskInfo(c.io.taskInfo, testedNumDeps, testedNanosID)
-        placeArgsAndParentInfo(c.io.argsAndParentInfo, testedNumArgs, testedParentID)
-        c.io.picosSubData.valid.expect(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        checkHeaderInnerRoutingPacket()
-        checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-        c.io.picosSubData.valid.expect(false.B)
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.swID.ready.poke(false.B)
-        c.io.picosSubData.valid.expect(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-        c.io.picosSubData.valid.expect(false.B)
-
-        c.io.swID.ready.poke(true.B)
-        c.io.picosSubData.valid.expect(true.B)
-
-        checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber)
-
-          c.clock.step()
-        c.io.swID.ready.poke(false.B)
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-        c.io.picosSubData.ready.poke(false.B)
-        c.io.swID.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.picosSubData.valid.expect(false.B)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-
-        checkPacket1(c.io.picosSubData, testedParentID)
-        checkPayloadInnerRoutingPacket(testedNumDeps)
-
-          c.clock.step()
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-        c.io.picosSubData.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.picosSubData.valid.expect(false.B)
-
-        c.io.routingInfo.ready.poke(true.B)
-        c.io.routingInfoOuter.ready.poke(true.B)
-        c.io.picosSubData.ready.poke(true.B)
-
-        checkPacket2(c.io.picosSubData)
-        checkPayloadArgsAddingInnerRoutingPacket(testedNumArgs)
-        
-        // The following lines ensure that one packet is consumed
-        // from each of these interfaces at the end of each header
-        // generation cycle
-        c.io.taskInfo.valid.expect(true.B)
-        c.io.taskInfo.ready.expect(true.B)
-        c.io.argsAndParentInfo.valid.expect(true.B)
-        c.io.argsAndParentInfo.ready.expect(true.B)
-
-          c.clock.step()
-
-        unplaceTaskInfo(c.io.taskInfo)
-        unplaceArgsAndParentInfo(c.io.argsAndParentInfo)
-        c.io.picosSubData.ready.poke(false.B)
-        c.io.routingInfo.ready.poke(false.B)
-        c.io.routingInfoOuter.ready.poke(false.B)
-
-          waitRandomAmountOfCycles(c)
-      }
-    }
-  }
-
 	behavior of "CoreSpecificSubmissionHandler"
   it should "produce a valid header sequence" in {
       test(new CoreSpecificSubmissionHandler(numTestedCores, 33)) { c =>
@@ -497,8 +251,8 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             //val testNumDeps = r.nextInt(16)
             val testNumDeps = r.nextInt(16)
             val testParentID = r.nextLong() & 0xffffffffL
-            //val testNanosID = r.nextLong() & 0xffffffffL
-            val testNanosID = r.nextLong() & 0xffL
+            val testNanosID = r.nextLong() & 0xffffffffL
+            //val testNanosID = r.nextLong() & 0xffL
             //val testNanosID = 0xdeadbeefL
 
             val INVALID_TYPE = 0
@@ -512,14 +266,16 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             c.io.routingInfoOuter.valid.expect(false.B)
 
             placeTaskInfo(c.io.taskInfo, testNumDeps, testNanosID)
-            placeArgsAndParentInfo(c.io.argsAndParentInfo, testNumArgs, testParentID)
             c.io.taskInfo.ready.expect(true.B)
-            c.io.depInfo.ready.expect(true.B)
               c.clock.step()
             unplaceTaskInfo(c.io.taskInfo)
+
+            placeArgsAndParentInfo(c.io.argsAndParentInfo, testNumArgs, testParentID)
+            c.io.argsAndParentInfo.ready.expect(true.B)
+              c.clock.step()
             unplaceArgsAndParentInfo(c.io.argsAndParentInfo)
+
             c.io.routingInfoOuter.valid.expect(true.B)
-            
             checkOuterRoutingPacket(c, testCoreID, testNumDeps, testNumArgs)
 
             // The leaf GuidedArbiter has not processed the routing packet
@@ -672,9 +428,10 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
         c.io.picosSubMaster.valid.expect(false.B)
         placeTaskInfo(c.io.taskInfoVec(testCoreID), testNumDeps, testNanosID)
-        placeArgsAndParentInfo(c.io.argsAndParentInfoVec(testCoreID), testNumArgs, testParentID)
           c.clock.step()
         unplaceTaskInfo(c.io.taskInfoVec(testCoreID))
+        placeArgsAndParentInfo(c.io.argsAndParentInfoVec(testCoreID), testNumArgs, testParentID)
+          c.clock.step()
         unplaceArgsAndParentInfo(c.io.argsAndParentInfoVec(testCoreID))
           c.clock.step()
           //println(s"(picosSubMaster.bits) = ${c.io.picosSubMaster.bits.peek().litValue.toString(16)}")
@@ -776,9 +533,403 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.picosSubMaster.ready.poke(true.B)
           c.clock.step()
         c.io.picosSubMaster.ready.poke(false.B)
+      }
+    }
+  }
 
-        unplaceDepInfo(c.io.depInfoVec(testCoreID))
-        c.io.picosSubMaster.ready.poke(false.B)
+	behavior of "ReadyPacketExtractor"
+  it should "send ready task data coming from Picos to the requesting cores respecting the petition order, at least when there is never more than one routing request packet in queue" in {
+    test(new ReadyPacketExtractor(numTestedCores)) { c =>
+      val generateRandomInput = () => {
+        var inputList : ListBuffer[BigInt] = ListBuffer()
+        val sequenceLength = 5
+        
+        for (i <- 0 until sequenceLength) {
+          val newPacket = asUnsigned(nextLong().abs)
+          //println("newPacket: " + toHexString(newPacket))
+          inputList += newPacket
+        }
+        inputList
+      }
+
+      val sendReadyPacket = (testPacket : BigInt) => {
+        var tryAgain = false
+
+        do {
+          tryAgain = false
+          c.io.picosReadyInterface.valid.poke(true.B)
+          c.io.picosReadyInterface.data.payload.poke(testPacket.U)
+          if (c.io.picosReadyInterface.empty.peek().litToBoolean) {
+          } else {
+            tryAgain = true
+          }
+          c.clock.step()
+          c.io.picosReadyInterface.valid.poke(false.B)
+          c.io.picosReadyInterface.data.payload.poke(0.U)
+        } while (tryAgain)
+      }
+
+      val sendRoutingPacket = (coreID : Int) => {
+        var tryAgain = false
+
+        do {
+          tryAgain = false
+          c.io.readyRequestInterface(coreID).valid.poke(true.B)
+          if (c.io.readyRequestInterface(coreID).ready.peek().litToBoolean) {
+          } else {
+            tryAgain = true
+          }
+          c.clock.step()
+          c.io.readyRequestInterface(coreID).valid.poke(false.B)
+        } while (tryAgain)
+      }
+
+      val driveInputSequence = (inputSequence : ListBuffer[BigInt]) => {
+        inputSequence.foreach{ case el => 
+          sendReadyPacket(el)
+        }
+      }
+
+      class ReadyTaskInfo {
+        var numArgs: BigInt = 0
+        var picosID: BigInt = 0
+        var parentID: BigInt = 0
+        var nanosID: BigInt = 0
+        var tID: BigInt = 0
+
+        override def toString() : String = {
+          val baseList = List(numArgs, picosID, parentID, nanosID, tID)
+          val hexList = baseList.map(toHexString(_))
+          val innerString = hexList.foldRight("")(_ + ", " + _).dropRight(2)
+          return "(numArgs, picosID, parentID, nanosID, tID) = (" + innerString + ")"
+        }
+
+        override def equals(other: Any): Boolean = {
+          other match {
+            case other: ReadyTaskInfo => picosID == other.picosID && nanosID == other.nanosID && tID == other.tID
+            case _ => false
+          }
+        }
+      }
+
+      val interpretInput = (input: ListBuffer[BigInt]) => {
+        assert(input.size == 5)
+        var readyTask = new ReadyTaskInfo
+        readyTask.numArgs  = input(0) & 0xff00
+        readyTask.picosID  = input(1) & 0xffffffffL
+        readyTask.parentID = input(2)
+        readyTask.nanosID  = input(4)
+
+        readyTask
+      }
+
+      val fetchAnswerForCore = (coreID : Int) => {
+        c.io.readyQInterface(coreID).ready.poke(true.B)
+        while (!c.io.readyQInterface(coreID).valid.peek().litToBoolean) {
+          c.clock.step()
+        }
+
+        var readyTask = new ReadyTaskInfo
+
+        val rawPicosID =  c.io.readyQInterface(coreID).bits.picosID.peek().litValue
+        val cleanPicosID = rawPicosID & 0xffffffffL
+        val tID = rawPicosID >> 32
+
+        readyTask.nanosID = c.io.readyQInterface(coreID).bits.nanosID.peek().litValue
+        readyTask.picosID = cleanPicosID
+        readyTask.tID = tID
+
+        c.clock.step()
+        c.io.readyQInterface(coreID).ready.poke(false.B)
+
+        readyTask
+      }
+
+      val numReadyTaskFetches = 10
+      for (i <- 0 until numReadyTaskFetches) {
+        val randomInputSequence = generateRandomInput()
+        val targetCore = i % numTestedCores
+        val interpretedInput = interpretInput(randomInputSequence)
+
+        val testedTID = r.nextInt(maxTID + 1)
+
+        //println(s"Iteration $i")
+
+        interpretedInput.tID = testedTID
+        //println("Ground truth: " + interpretedInput)
+
+        //println(interpretedInput)
+        setTID(c.io.picosReadyInterface, testedTID)
+        driveInputSequence(randomInputSequence)
+        
+        sendRoutingPacket(targetCore)
+        val answer = fetchAnswerForCore(targetCore)
+        //println(answer)
+        assert(interpretedInput == answer)
+      } 
+    }
+  }
+
+	behavior of "SubmissionHeaderGenerator"
+  it should "generate four 64-bit header packets following Picos standards as well as a single routingInfo packet complying with Guided Arbiter at every loop " in {
+    test(new SubmissionHeaderGenerator(numTestedCores)) { c =>
+      val checkHeaderInnerRoutingPacket = () => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(0.U)
+        c.io.routingInfo.bits.numPackets.expect(3.U)
+      }
+
+      val checkPayloadInnerRoutingPacket = (numDeps: Int) => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(1.U)
+        c.io.routingInfo.bits.numPackets.expect((numDeps).U)
+      }
+
+      val checkPayloadArgsAddingInnerRoutingPacket = (numArgs: Int) => {
+        c.io.routingInfo.valid.expect(true.B)
+        c.io.routingInfo.bits.arbID.expect(2.U)
+        c.io.routingInfo.bits.numPackets.expect((numArgs + 1).U)
+      }
+
+      val checkOuterRoutingPacket = (coreID: Int, numDeps: Int, numArgs: Int) => {
+        c.io.routingInfoOuter.valid.expect(true.B)
+        c.io.routingInfoOuter.bits.arbID.expect(coreID.U)
+        c.io.routingInfoOuter.bits.numPackets.expect((3 + numDeps + numArgs + 1).U)
+      }
+
+      val testedCoreID = (numTestedCores + 2) % numTestedCores 
+      
+      c.io.coreID.poke(testedCoreID.U)
+
+      for (i <- 0 until 100) {
+        //println("Running iteration " + i)
+        val testedTaskNumber = i + 1
+        val testedNumDeps = r.nextInt(16)
+        val testedParentID = r.nextLong() & 0xffffffffL
+        val testedNanosID = r.nextLong() & 0xffffffffL
+        val testedNumArgs = r.nextInt(15)
+
+        placeTaskInfo(c.io.taskInfo, testedNumDeps, testedNanosID)
+        placeArgsAndParentInfo(c.io.argsAndParentInfo, testedNumArgs, testedParentID)
+        c.io.picosSubData.valid.expect(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        checkHeaderInnerRoutingPacket()
+        checkOuterRoutingPacket(testedCoreID, testedNumDeps, testedNumArgs)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.swID.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+        c.io.swID.ready.poke(true.B)
+        c.io.picosSubData.valid.expect(true.B)
+
+        checkPacket0(c.io.picosSubData, testedNumDeps, testedTaskNumber, testedNumArgs)
+
+          c.clock.step()
+        c.io.swID.ready.poke(false.B)
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.ready.poke(false.B)
+        c.io.swID.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+
+        checkPacket1(c.io.picosSubData, testedParentID)
+        checkPayloadInnerRoutingPacket(testedNumDeps)
+
+          c.clock.step()
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+        c.io.picosSubData.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
+
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.picosSubData.valid.expect(false.B)
+
+        c.io.routingInfo.ready.poke(true.B)
+        c.io.routingInfoOuter.ready.poke(true.B)
+        c.io.picosSubData.ready.poke(true.B)
+
+        checkPacket2(c.io.picosSubData)
+        checkPayloadArgsAddingInnerRoutingPacket(testedNumArgs)
+        
+        // The following lines ensure that one packet is consumed
+        // from each of these interfaces at the end of each header
+        // generation cycle
+        c.io.taskInfo.valid.expect(true.B)
+        c.io.taskInfo.ready.expect(true.B)
+        c.io.argsAndParentInfo.valid.expect(true.B)
+        c.io.argsAndParentInfo.ready.expect(true.B)
+
+          c.clock.step()
+
+        unplaceTaskInfo(c.io.taskInfo)
+        unplaceArgsAndParentInfo(c.io.argsAndParentInfo)
+        c.io.picosSubData.ready.poke(false.B)
+        c.io.routingInfo.ready.poke(false.B)
+        c.io.routingInfoOuter.ready.poke(false.B)
+
+          waitRandomAmountOfCycles(c)
+      }
+    }
+  }
+  */
+
+	behavior of "ResubmissionHandler"
+  it should "Ensure submission sequences are re-submitted after being first sent to Picos if, and only if, Picos rejects that sequence" in {
+    test(new ResubmissionHandler) { c =>
+      class RawSubmissionSequence(val maxSequenceLength: Int = 33) {
+        var inputList : ListBuffer[BigInt] = ListBuffer()
+
+        val sequenceLength = 3 + r.nextInt(maxSequenceLength + 1 - 3)
+        val dest = if (sequenceLength == 3) 3 else 2
+        
+        for (i <- 0 until sequenceLength) {
+          val newPacket = asUnsigned(nextLong().abs)
+          //println("newPacket: " + toHexString(newPacket))
+          inputList += newPacket
+        }
+
+        def submitSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, isLast: Boolean = false): Unit = {
+          var tryAgain = false
+
+          do {
+            tryAgain = false
+            io.valid.poke(true.B)
+            io.bits.poke(testPacket.U)
+            if (io.ready.peek().litToBoolean) {
+              if (isLast) {
+                lastSignal.poke(true.B)
+              }
+            } else {
+              tryAgain = true
+            }
+            module.clock.step()
+            io.valid.poke(false.B)
+            lastSignal.poke(false.B)
+            io.bits.poke(0.U)
+          } while (tryAgain)
+        }
+
+        def checkSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, isLast: Boolean = false): Unit = {
+          var tryAgain = false
+
+          do {
+            tryAgain = false
+            io.ready.poke(true.B)
+            if (io.valid.peek().litToBoolean) {
+              lastSignal.expect(isLast.B)
+              io.bits.expect(testPacket.U)
+            } else {
+              tryAgain = true
+            }
+            module.clock.step()
+            io.ready.poke(false.B)
+          } while (tryAgain)
+        }
+
+        override def toString() : String = {
+          val hexList = inputList.map(toHexString(_))
+          val innerString = hexList.foldRight("")(_ + ", " + _).dropRight(2)
+          return "(" + innerString + ")"
+        }
+
+        val submitSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool) => {
+           inputList.zipWithIndex.foreach { case (v, i) => 
+            val isLast = (i == (inputList.size - 1))
+            submitSinglePacket(io, module, lastSignal, v, isLast)
+           }
+        }
+
+        val checkIncomingSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool) => {
+           inputList.zipWithIndex.foreach { case (v, i) => 
+            val isLast = (i == (inputList.size - 1))
+
+            //println(s"Checking packet #$i from ${inputList.size}")
+            checkSinglePacket(io, module, lastSignal, v, isLast)
+           }
+        }
+      }
+
+      c.io.picosSubMaster.valid.expect(false.B)
+      c.io.rawPackets.valid.poke(true.B)
+      c.io.lastIn.poke(true.B)
+      c.clock.step()
+
+      c.io.rawPackets.valid.poke(false.B)
+      c.io.lastIn.poke(false.B)
+      c.io.picosSubMaster.valid.expect(true.B)
+      c.io.lastOut.expect(true.B)
+      c.io.picosSubMaster.ready.poke(true.B)
+      c.clock.step()
+
+      c.io.picosSubMaster.ready.poke(false.B)
+      c.io.picosAckInterface.data.poke(1.U)
+      c.io.picosAckInterface.valid.poke(true.B)
+      c.clock.step()
+
+      c.io.picosAckInterface.valid.poke(false.B)
+      c.clock.step()
+      c.clock.step()
+      c.clock.step()
+
+      for (i <- 0 until 1000) {
+        //println(s"Submission #$i")
+
+        val packetSeq = new RawSubmissionSequence
+        //println(s"Random sequence: ${packetSeq}")
+        packetSeq.submitSequence(c.io.rawPackets, c, c.io.lastIn)
+
+        c.clock.step()
+
+        c.io.rawPackets.ready.expect(false.B)
+        packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut)
+        c.io.rawPackets.ready.expect(false.B)
+
+        while (r.nextBoolean()) {
+          //println("Checking sequence re-submission")
+          c.io.picosAckInterface.data.poke(0.U)
+          c.io.picosAckInterface.valid.poke(true.B)
+          c.clock.step()
+
+          c.io.rawPackets.ready.expect(false.B)
+          c.io.picosAckInterface.valid.poke(false.B)
+
+          c.clock.step()
+
+          packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut)
+        }
+
+        c.io.picosAckInterface.data.poke(1.U)
+        c.io.picosAckInterface.valid.poke(true.B)
+        c.clock.step()
+
+        c.io.rawPackets.ready.expect(true.B)
+        c.io.picosAckInterface.valid.poke(false.B)
       }
     }
   }
