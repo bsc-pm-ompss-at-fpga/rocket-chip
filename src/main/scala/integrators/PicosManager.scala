@@ -427,6 +427,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 
 				val coreSubmissionHandlers = Vec.fill(nCores) {Module(new CoreSpecificSubmissionHandler(nCores, maxSequenceLength, typ)).io}
 				val masterGuidedArbiter = Module(new GuidedArbiter(typ, nCores, maxSequenceLength, numDownCycles))
+				val resubmissionHandler = Module(new ResubmissionHandler)
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 				val taskNumberCounter = RegInit(0.U(32.W))
 				val destReg = RegInit(0.U(3.W))
@@ -443,6 +444,10 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 
 				val awaitingAcknowledgement = RegInit(false.B)
 
+				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
+				masterGuidedArbiter.io.enabled := resubmissionHandler.io.readyForNewTasks
+
+				/*
 				masterGuidedArbiter.io.enabled := !awaitingAcknowledgement
 
 				io.picosAckInterface.empty := awaitingAcknowledgement
@@ -453,6 +458,11 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				}
 				io.last := masterGuidedArbiter.io.last
 
+				io.picosSubMaster <> masterGuidedArbiter.io.out
+
+				io.dest := destReg
+				*/
+
 				when (routingArbiter.io.out.fire()) {
 					taskNumberCounter := taskNumberCounter + 1.U
 
@@ -460,9 +470,14 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 					destReg := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
 				}
 
-				masterGuidedArbiter.io.routingInfo <> routingArbiter.io.out
-				io.picosSubMaster <> masterGuidedArbiter.io.out
-				io.dest := destReg
+				resubmissionHandler.io.rawPackets <> masterGuidedArbiter.io.out
+				io.picosSubMaster <> resubmissionHandler.io.picosSubMaster
+				resubmissionHandler.io.lastIn := masterGuidedArbiter.io.last
+				resubmissionHandler.io.destIn := destReg
+				resubmissionHandler.io.picosAckInterface <> io.picosAckInterface
+
+				io.last := resubmissionHandler.io.lastOut
+				io.dest := resubmissionHandler.io.dest
 }
 
 trait HasRPEDebugSignals extends Bundle {
