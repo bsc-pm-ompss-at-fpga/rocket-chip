@@ -82,8 +82,8 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       numArgs = rawNumArgs + 1
     }
 
-    println(s"Required number of deps, arguments: $numDeps, $numArgs")
-    println(toHexString(picosSubPacket))
+    //println(s"Required number of deps, arguments: $numDeps, $numArgs")
+    //println(toHexString(picosSubPacket))
 
     assert(((picosSubPacket >> 8) & 0xf) == numArgs)
     assert(((picosSubPacket >> 16) & 0xf) == numDeps)
@@ -154,7 +154,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   def asUnsigned(unsignedLong: Long) =
     (BigInt(unsignedLong >>> 1) << 1) + (unsignedLong & 1)
 
-  /*
 	behavior of "DependenceInfoAdapter"
   it should "generate one Picos submission packet per depInfo packet whenever the second dependence is invalid" in {
       test(new DependenceInfoAdapter) { c =>
@@ -799,7 +798,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-  */
 
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
@@ -824,8 +822,8 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         val OUT_TYPE = 2
         val INOUT_TYPE = 3
 
-        println(s"Test #$i")
-        println(s"Num deps: $testNumDeps")
+        //println(s"Test #$i")
+        //println(s"Num deps: $testNumDeps")
 
         if (!firstSubmission) {
             c.clock.step()
@@ -898,7 +896,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           val testDepPointer1 = r.nextLong() & 0xffffffffffffffL
           val testDepKind1 = if (j + 1 < testNumDeps) r.nextInt(4) else 0
 
-          println("Dep #" + j)
+          //println("Dep #" + j)
 
           placeDepInfo(c.io.depInfoVec(testCoreID), testDepPointer0, testDepKind0, testDepPointer1, testDepKind1)
             c.clock.step()
