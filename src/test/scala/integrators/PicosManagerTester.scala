@@ -73,7 +73,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       c.bits(1).kind.poke(0.U)
   }
 
-  def checkPacket0 (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long, rawNumArgs: Int, addIDArg: Boolean = true) {
+  def checkPacket0 (c: DecoupledIO[UInt], numDeps: Int, taskNumber: Long, rawNumArgs: Int = 0, addIDArg: Boolean = true) {
     c.valid.expect(true.B)
     val picosSubPacket = c.bits.peek().litValue
     
@@ -82,8 +82,8 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       numArgs = rawNumArgs + 1
     }
 
-    println(s"Required number of deps, arguments: $numDeps, $numArgs")
-    println(toHexString(picosSubPacket))
+    //println(s"Required number of deps, arguments: $numDeps, $numArgs")
+    //println(toHexString(picosSubPacket))
 
     assert(((picosSubPacket >> 8) & 0xf) == numArgs)
     assert(((picosSubPacket >> 16) & 0xf) == numDeps)
@@ -154,7 +154,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   def asUnsigned(unsignedLong: Long) =
     (BigInt(unsignedLong >>> 1) << 1) + (unsignedLong & 1)
 
-  /*
 	behavior of "DependenceInfoAdapter"
   it should "generate one Picos submission packet per depInfo packet whenever the second dependence is invalid" in {
       test(new DependenceInfoAdapter) { c =>
@@ -797,7 +796,6 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
-  */
 
 	behavior of "ResubmissionHandler"
   it should "Ensure submission sequences are re-submitted after being first sent to Picos if, and only if, Picos rejects that sequence" in {
@@ -814,7 +812,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           inputList += newPacket
         }
 
-        def submitSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, isLast: Boolean = false): Unit = {
+        def submitSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, destSignal: UInt, testDest: Int, isLast: Boolean = false): Unit = {
           var tryAgain = false
 
           do {
@@ -822,6 +820,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             io.valid.poke(true.B)
             io.bits.poke(testPacket.U)
             if (io.ready.peek().litToBoolean) {
+              destSignal.poke(testDest.U)
               if (isLast) {
                 lastSignal.poke(true.B)
               }
@@ -835,7 +834,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           } while (tryAgain)
         }
 
-        def checkSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, isLast: Boolean = false): Unit = {
+        def checkSinglePacket(io: DecoupledIO[UInt], module: Module, lastSignal: Bool, testPacket: BigInt, destSignal: UInt, testDest: Int, isLast: Boolean = false): Unit = {
           var tryAgain = false
 
           do {
@@ -843,6 +842,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             io.ready.poke(true.B)
             if (io.valid.peek().litToBoolean) {
               lastSignal.expect(isLast.B)
+              destSignal.expect(testDest.U)
               io.bits.expect(testPacket.U)
             } else {
               tryAgain = true
@@ -858,20 +858,22 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
           return "(" + innerString + ")"
         }
 
-        val submitSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool) => {
-           inputList.zipWithIndex.foreach { case (v, i) => 
+        val submitSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool, destSignal: UInt) => {
+          val testDest = if (inputList.size == 3) 3 else 2
+          inputList.zipWithIndex.foreach { case (v, i) => 
             val isLast = (i == (inputList.size - 1))
-            submitSinglePacket(io, module, lastSignal, v, isLast)
-           }
+            submitSinglePacket(io, module, lastSignal, v, destSignal, testDest, isLast)
+          }
         }
 
-        val checkIncomingSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool) => {
-           inputList.zipWithIndex.foreach { case (v, i) => 
+        val checkIncomingSequence = (io: DecoupledIO[UInt], module: Module, lastSignal: Bool, destSignal: UInt) => {
+          val testDest = if (inputList.size == 3) 3 else 2
+          inputList.zipWithIndex.foreach { case (v, i) => 
             val isLast = (i == (inputList.size - 1))
 
             //println(s"Checking packet #$i from ${inputList.size}")
-            checkSinglePacket(io, module, lastSignal, v, isLast)
-           }
+            checkSinglePacket(io, module, lastSignal, v, destSignal, testDest, isLast)
+          }
         }
       }
 
@@ -902,12 +904,12 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
         val packetSeq = new RawSubmissionSequence
         //println(s"Random sequence: ${packetSeq}")
-        packetSeq.submitSequence(c.io.rawPackets, c, c.io.lastIn)
+        packetSeq.submitSequence(c.io.rawPackets, c, c.io.lastIn, c.io.destIn)
 
         c.clock.step()
 
         c.io.rawPackets.ready.expect(false.B)
-        packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut)
+        packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut, c.io.dest)
         c.io.rawPackets.ready.expect(false.B)
 
         while (r.nextBoolean()) {
@@ -921,7 +923,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
           c.clock.step()
 
-          packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut)
+          packetSeq.checkIncomingSequence(c.io.picosSubMaster, c, c.io.lastOut, c.io.dest)
         }
 
         c.io.picosAckInterface.data.poke(1.U)
