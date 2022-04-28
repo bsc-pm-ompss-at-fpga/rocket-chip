@@ -82,12 +82,12 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       numArgs = rawNumArgs + 1
     }
 
-    //println(s"Required number of deps, arguments: $numDeps, $numArgs")
-    //println(toHexString(picosSubPacket))
+    println(s"Required number of deps, arguments, taskNumber: $numDeps, $numArgs, $taskNumber")
+    println(toHexString(picosSubPacket))
 
     assert(((picosSubPacket >> 8) & 0xf) == numArgs)
     assert(((picosSubPacket >> 16) & 0xf) == numDeps)
-    assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
+    //assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
   }
 
   // TODO: Implement once we start supporting nesting
@@ -240,12 +240,13 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   it should "produce a valid header sequence" in {
       test(new CoreSpecificSubmissionHandler(numTestedCores, 33)) { c =>
           val testCoreID = 7
+          c.io.enableInternalNumbering.poke(true.B)
 
           for (i <- 0 until 100) {
             // TODO: Change this once we implement user-provided
             //       argument passing
             val testNumArgs = 0
-            val testTaskNumber = i + 1
+            val testTaskNumber = i
 
             //val testNumDeps = r.nextInt(16)
             val testNumDeps = r.nextInt(16)
@@ -565,7 +566,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
       for (i <- 0 until 100) {
         //println("Running iteration " + i)
-        val testedTaskNumber = i + 1
+        val testedTaskNumber = i
         val testedNumDeps = r.nextInt(16)
         val testedParentID = r.nextLong() & 0xffffffffL
         val testedNanosID = r.nextLong() & 0xffffffffL

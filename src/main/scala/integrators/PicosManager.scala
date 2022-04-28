@@ -143,6 +143,7 @@ class SubmissionHeaderGeneratorIO[T <: Data](nCores: Int, typ: T = UInt(64.W)) e
 				val picosSubData							= Decoupled(typ.cloneType)
 				val coreID										= Input(UInt(log2Ceil(nCores).W))
 				val suggestedTaskNumber				= Input(UInt(32.W))
+				val enableInternalNumbering		= Input(Bool())
 }
 
 class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) extends Module {
@@ -151,7 +152,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 
 				val counter = RegInit(0.U(log2Ceil(cycleLength).W))
 				// TODO: Check whether this should be initialized to 0 or 1
-				val taskNumberCounter = RegInit(1.U(32.W))
+				val taskNumberCounter = RegInit(0.U(32.W))
 
 				val wrapCounter = counter === (cycleLength - 1).U
 				val headerInnerRoutingPacketWasSent = RegInit(false.B)
@@ -199,7 +200,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					// sequence to requested by the software layer with a packet encoding the `swID`
 					io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
-					when (io.suggestedTaskNumber =/= 0.U) {
+					when (io.enableInternalNumbering === false.B) {
 						io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
 					} .otherwise {
 						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
@@ -353,15 +354,25 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 				val packetMem                = Mem(maxSeqLength, typ.cloneType)
 				val writeCounter             = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = 0.U)
 				val readCounter              = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = 0.U)
+
+				// TODO: FIX THIS
+				// The following is incorrect for maxSeqLengths = m such that (m + 1) = 2 ^ log2Ceil(m + 1)
 				val lastID                   = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = (maxSeqLength + 1).U)
+
 				val activeDest                = Reg(t = UInt(3.W), init = 0.U)
 
 				val awaitingAcknowledgement  = RegInit(false.B)
 				val awaitingResubmission     = RegInit(false.B)
 
+				val positiveAckWasDetected = dontTouch(Wire(false.B))
+				val negativeAckWasDetected = dontTouch(Wire(false.B))
+
 				io.readyForNewTasks         := !awaitingAcknowledgement && !awaitingResubmission
 
 				io.picosAckInterface.empty  := awaitingAcknowledgement
+
+				positiveAckWasDetected := false.B
+				negativeAckWasDetected := false.B
 				when (awaitingAcknowledgement) {
 					when (io.picosAckInterface.valid) {
 						awaitingAcknowledgement := false.B
@@ -369,8 +380,10 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 						when (io.picosAckInterface.data === 0.U) {
 							awaitingResubmission := true.B
 							readCounter := 0.U
+							negativeAckWasDetected := true.B
 						} .otherwise {
 							awaitingResubmission := false.B
+							positiveAckWasDetected := true.B
 							lastID := (maxSeqLength + 1).U
 							activeDest := 0.U
 							writeCounter := 0.U
@@ -464,7 +477,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				*/
 
 				when (routingArbiter.io.out.fire()) {
-					taskNumberCounter := taskNumberCounter + 1.U
+					taskNumberCounter := taskNumberCounter
 
 					val numPacketsToRoute = routingArbiter.io.out.bits.numPackets
 					destReg := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
@@ -496,9 +509,9 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 
 	val roccReadyQueue = Module( new Queue(new ReadyPacket, 64) )
 	dontTouch(roccReadyQueue.io.count)
-	val roccReadyQueueEnqCounter = dontTouch(RegInit(0.U(64.W)))
+	val roccReadyQueueEnqCounter = dontTouch(RegInit(0.U(32.W)))
 	roccReadyQueueEnqCounter := Mux(roccReadyQueue.io.enq.fire(), roccReadyQueueEnqCounter + 1.U, roccReadyQueueEnqCounter)
-	val roccReadyQueueDeqCounter = dontTouch(RegInit(0.U(64.W)))
+	val roccReadyQueueDeqCounter = dontTouch(RegInit(0.U(32.W)))
 	roccReadyQueueDeqCounter := Mux(roccReadyQueue.io.deq.fire(), roccReadyQueueDeqCounter + 1.U, roccReadyQueueDeqCounter)
 
 	val coreSpecificReadyQueues = Vec(Seq.fill(nCores) { Module(new Queue(new ReadyPacket, qDepth)).io })
@@ -514,6 +527,12 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 
 	// This makes sure that the data requests are acknowledged by the arbiter
 	// TODO: THIS SEEMS VERY DANGEROUS!
+	//
+	// 2022 update: This is simply ensuring that
+	// no data request consumption firings will be
+	// be prevented by any reason other than lack
+	// of free space for holding that request information
+	// inside the InOrderArbiter until it is fulfilled.
 	wf_arbiter.io.out_req.ready := true.B
 	val wf_counter = Reg(t = UInt(3.W), init = 0.U)
 
@@ -556,6 +575,11 @@ class RetirementHandlerIO (nCores: Int) extends Bundle {
 
 class RetirementHandler (nCores: Int) extends Module {
 	val io = IO(new RetirementHandlerIO(nCores))
+	val retirementCounter = dontTouch(RegInit(0.U(32.W)))
+
+	when (io.picosFinishedInterface.valid && io.picosFinishedInterface.empty) {
+		retirementCounter := retirementCounter + 1.U 
+	}
 
 	val arbiter = Module(new RRArbiterWithPrefixAndSuffix(UInt(64.W), nCores, 3, 3, 0))
 
