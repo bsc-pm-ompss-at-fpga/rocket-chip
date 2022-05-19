@@ -527,22 +527,33 @@ class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSi
   io.suffixing := suffixing
   io.prefixing := prefixing
 
+  val processingQueue = Module(new Queue(typ, 1))
+
   val updateTriggerContent = io.out.fire() && prefixing && !suffixing
-  val triggerContentReg = RegEnable(roundRobinArbiter.io.out.bits, updateTriggerContent)
+  //val triggerContentReg = RegEnable(roundRobinArbiter.io.out.bits, updateTriggerContent)
+  val triggerContentReg = RegEnable(processingQueue.io.deq.bits, updateTriggerContent)
+  //val locked = Reg(init = Bool(false))
+
+  processingQueue.io.enq <> roundRobinArbiter.io.out
 
   roundRobinArbiter.io.in <> io.in
-  arbitraryPrefixerAndSuffixer.io.in <> roundRobinArbiter.io.out
-  arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid && io.enablePrefixing
+  //arbitraryPrefixerAndSuffixer.io.in <> roundRobinArbiter.io.out
+  arbitraryPrefixerAndSuffixer.io.in <> processingQueue.io.deq
+  //arbitraryPrefixerAndSuffixer.io.enablePrefixing := roundRobinArbiter.io.out.valid && io.enablePrefixing
+  arbitraryPrefixerAndSuffixer.io.enablePrefixing := processingQueue.io.deq.valid && io.enablePrefixing
   io.out <> arbitraryPrefixerAndSuffixer.io.out
-  io.arbiterMonitor.bits := roundRobinArbiter.io.out.bits
-  io.arbiterMonitor.valid := roundRobinArbiter.io.out.valid
+  //io.arbiterMonitor.bits := roundRobinArbiter.io.out.bits
+  //io.arbiterMonitor.valid := roundRobinArbiter.io.out.valid
+  io.arbiterMonitor.bits := processingQueue.io.deq.bits
+  io.arbiterMonitor.valid := processingQueue.io.deq.valid
   io.last := suffixing
 
   // The following condition ensures `io.triggerContent` only acts as a passthrough
   // for `roundRobinArbiter.io.out.bits` when this module is actually outputting
   // the prefix
   when (prefixing && !suffixing && !arbitraryPrefixerAndSuffixer.io.in.ready) {
-    io.triggerContent := roundRobinArbiter.io.out.bits
+    //io.triggerContent := roundRobinArbiter.io.out.bits
+    io.triggerContent := processingQueue.io.deq.bits
   } .otherwise {
     io.triggerContent := triggerContentReg
   }

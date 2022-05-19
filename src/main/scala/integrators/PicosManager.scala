@@ -160,6 +160,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				val argsAddingInnerRoutingPacketWasSent = RegInit(false.B)
 				val outerRoutingPacketWasSent = RegInit(false.B)
 				val swIDPacketWasSent = RegInit(false.B)
+				val latchedTaskNumber = RegInit(0.U(32.W))
 
 				io.argsAndParentInfo.ready := false.B
 				io.taskInfo.ready := false.B
@@ -176,6 +177,19 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 				val twelveZeros = 0.U(12.W)
 				val sixteenZeros = 0.U(16.W)
 				val thirtyTwoZeros = 0.U(32.W)
+				val activeTaskNumber = Wire(UInt(32.W))
+
+				//val taskNumberWasLatched = RegInit(false.B)
+				val taskNumberWasLatched = outerRoutingPacketWasSent
+				when (io.enableInternalNumbering) {
+					activeTaskNumber := taskNumberCounter
+				} .otherwise {
+					when (taskNumberWasLatched) {
+						activeTaskNumber := latchedTaskNumber
+					} .otherwise {
+						activeTaskNumber := io.suggestedTaskNumber
+					}
+				}
 
 				// TODO: This will need to be modified when we start supporting nested tasks
 			switch (counter) {
@@ -200,11 +214,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					// sequence to requested by the software layer with a packet encoding the `swID`
 					io.routingInfoOuter.bits.numPackets := 3.U(6.W) + numDeps + numArgs
 
-					when (io.enableInternalNumbering === false.B) {
-						io.picosSubData.bits := Cat(Seq(io.suggestedTaskNumber, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
-					} .otherwise {
-						io.picosSubData.bits := Cat(Seq(taskNumberCounter, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
-					}
+					io.picosSubData.bits := Cat(Seq(activeTaskNumber, twelveZeros, numDeps, fourZeros, numArgs, eightZeros))
 
 					// The following ensures we do not leave this state before
 					// the header inner routing packet is sent to the leaf
@@ -224,6 +234,7 @@ class SubmissionHeaderGenerator[T <: Data](nCores: Int, typ: T = UInt(64.W)) ext
 					}
 
 					when (io.routingInfoOuter.fire()) {
+						latchedTaskNumber := io.suggestedTaskNumber
 						outerRoutingPacketWasSent := true.B
 					}
 
@@ -340,8 +351,9 @@ class CoreSpecificSubmissionHandler[T <: Data](nCores: Int, maxSequenceLength: I
 class ResubmissionHandlerIO[T <: Data](typ: T = UInt(64.W)) extends Bundle with HasDest {
 				val rawPackets        = Flipped(Decoupled(typ.cloneType))
 				val picosAckInterface = Flipped(new PicosFifoBundle(UInt(2.W)))
+				val destIn						= Flipped(Decoupled(UInt(3.W)))
 				val lastIn            = Bool().asInput
-				val destIn						= UInt(3.W).asInput
+
 
 				val picosSubMaster    = Decoupled(typ.cloneType)
 				val readyForNewTasks  = Bool().asOutput
@@ -357,9 +369,11 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 
 				// TODO: FIX THIS
 				// The following is incorrect for maxSeqLengths = m such that (m + 1) = 2 ^ log2Ceil(m + 1)
-				val lastID                   = Reg(t = UInt(log2Ceil(maxSeqLength + 1).W), init = (maxSeqLength + 1).U)
+				val lastID                   = Reg(t = UInt(log2Ceil(maxSeqLength + 2).W), init = (maxSeqLength + 1).U)
 
+				/*
 				val activeDest                = Reg(t = UInt(3.W), init = 0.U)
+				*/
 
 				val awaitingAcknowledgement  = RegInit(false.B)
 				val awaitingResubmission     = RegInit(false.B)
@@ -385,7 +399,9 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 							awaitingResubmission := false.B
 							positiveAckWasDetected := true.B
 							lastID := (maxSeqLength + 1).U
+							/*
 							activeDest := 0.U
+							*/
 							writeCounter := 0.U
 							readCounter := 0.U
 						}
@@ -397,9 +413,11 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 				io.picosSubMaster.valid := writeCounter > readCounter
 				io.picosSubMaster.bits := packetMem.read(readCounter)
 
-				io.lastOut := (readCounter === lastID) && (io.picosSubMaster.valid)
+				io.lastOut := (readCounter === lastID) && (io.picosSubMaster.fire())
+				io.destIn.ready := io.lastOut
 
-				io.dest := activeDest
+				//io.dest := activeDest
+				io.dest := io.destIn.bits
 
 				when (io.picosSubMaster.fire()) {
 					readCounter := readCounter + 1.U
@@ -412,9 +430,11 @@ class ResubmissionHandler[T <: Data](typ: T = UInt(64.W), maxSeqLength: Int = 3 
 						lastID := writeCounter
 					}
 
+					/*
 					when (writeCounter === 0.U) {
 						activeDest := io.destIn
 					}
+					*/
 
 					packetMem.write(writeCounter, io.rawPackets.bits)
 					writeCounter := writeCounter + 1.U
@@ -443,7 +463,8 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				val resubmissionHandler = Module(new ResubmissionHandler)
 				val routingArbiter = Module(new RRArbiter(new RoutingInfo(nCores, maxSequenceLength), nCores))
 				val taskNumberCounter = RegInit(0.U(32.W))
-				val destReg = RegInit(0.U(3.W))
+				//val destReg = RegInit(0.U(3.W))
+				val destQueue = Module( new Queue(UInt(3.W), 5) )
 
 				for (i <- 0 until nCores) {
 					coreSubmissionHandlers(i).taskInfo <> io.taskInfoVec(i)
@@ -451,6 +472,7 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 					coreSubmissionHandlers(i).depInfo <> io.depInfoVec(i)
 					coreSubmissionHandlers(i).coreID := i.U(log2Ceil(nCores).W)
 					coreSubmissionHandlers(i).suggestedTaskNumber := taskNumberCounter
+					coreSubmissionHandlers(i).enableInternalNumbering := false.B
 					masterGuidedArbiter.io.in(i) <> coreSubmissionHandlers(i).picosSubData
 					routingArbiter.io.in(i) <> coreSubmissionHandlers(i).routingInfoOuter
 				}
@@ -476,17 +498,21 @@ class SubmissionHandler[T <: Data](nCores: Int, typ: T = UInt(64.W), maxSequence
 				io.dest := destReg
 				*/
 
+				destQueue.io.enq.valid := false.B
 				when (routingArbiter.io.out.fire()) {
-					taskNumberCounter := taskNumberCounter
+					taskNumberCounter := taskNumberCounter + 1.U
 
 					val numPacketsToRoute = routingArbiter.io.out.bits.numPackets
-					destReg := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
+					//destReg := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
+					destQueue.io.enq.bits := Mux(numPacketsToRoute === 4.U, 3.U, 2.U)
+					destQueue.io.enq.valid := true.B
 				}
 
 				resubmissionHandler.io.rawPackets <> masterGuidedArbiter.io.out
 				io.picosSubMaster <> resubmissionHandler.io.picosSubMaster
 				resubmissionHandler.io.lastIn := masterGuidedArbiter.io.last
-				resubmissionHandler.io.destIn := destReg
+				//resubmissionHandler.io.destIn := destReg
+				resubmissionHandler.io.destIn <> destQueue.io.deq
 				resubmissionHandler.io.picosAckInterface <> io.picosAckInterface
 
 				io.last := resubmissionHandler.io.lastOut
