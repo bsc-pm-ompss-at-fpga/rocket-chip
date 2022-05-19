@@ -116,13 +116,22 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
     val suffixValue = 0
     val numTestLoops = 100
     var triggerPacket = BigInt(0L)
+    var currentCycle = 0
 
     test(new RRArbiterWithPrefixAndSuffix(inputType, numTestedCores, sequenceLength, prefixValue, suffixValue)) { c =>
+      val waitRandomAmountOfCycles = () => {
+        val numWaitCycles = r.nextInt(20)
+        for (k <- 0 until numWaitCycles) {
+          c.clock.step()
+          currentCycle += 1
+        }
+      }
+
       val generateInputMap = () => {                                                                                        
-        var hashMap = new HashMap[Int, Int]()                                                                                 
+        var hashMap = new HashMap[Int, (Int, Int)]()
         for (i <- 0 until numTestedCores) {
           if (nextBoolean()) {
-            hashMap += (i -> i)
+            hashMap += (i -> (currentCycle + nextInt(10), i))
           }
         }
         hashMap                                                                                                             
@@ -135,12 +144,13 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.out.ready.poke(true.B) // After this line, we can be sure a firing has happened
         if (step) {
           c.clock.step()
+					currentCycle += 1
           c.io.out.ready.poke(false.B)
         }
       }
 
       val generateEmptyInputMap = () => {
-        var hashMap = new HashMap[Int, Int]()                                                                                 
+        var hashMap = new HashMap[Int, (Int, Int)]()                                                                                 
       }
 
       val driveEmptyInputMap = () => {
@@ -149,54 +159,84 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         }
       }
 
-      val driveInputMap = (inputMap : HashMap[Int, Int]) => {
+      val driveInputMap = (inputMap : HashMap[Int, (Int, Int)]) => {
         driveEmptyInputMap()
-        inputMap.foreach{ case (idx, value) =>
-          c.io.in(idx).valid.poke(true.B)
+        inputMap.foreach{ case (idx, (minCycle, value)) =>
+          val minCycleWasReached = minCycle <= currentCycle
+          c.io.in(idx).valid.poke(minCycleWasReached.B)
           c.io.in(idx).bits.poke(value.U)
         }
       }
 
-      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap : HashMap[Int, Int]) => {
+      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap : HashMap[Int, (Int, Int)]) => {
         val numElements = inputMap.size
         driveInputMap(inputMap)
         for (i <- 0 until numElements) {
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: Iteration #$i")
+          while (c.io.arbiterMonitor.valid.peek().litValue == 0) {
+            c.clock.step()
+            currentCycle += 1
+            driveInputMap(inputMap)
+          }
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
           c.io.arbiterMonitor.valid.expect(true.B)
-          triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
+          //triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
 
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
-          c.io.triggerContent.expect(triggerPacket.U)
 
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
           c.io.last.expect(false.B)
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
+          c.io.arbiterMonitor.valid.expect(true.B)
+          triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
+          c.io.triggerContent.expect(triggerPacket.U)
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${triggerPacket}")
           checkWhetherOutputPacketIsAvailable(prefixValue, true)
+            driveInputMap(inputMap)
+          c.io.out.ready.poke(false.B)
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
           c.io.out.ready.poke(true.B)
           c.io.out.valid.expect(true.B)
 
           c.io.last.expect(false.B)
           val fetchedValue = c.io.out.bits.peek().litValue.toInt
 
-          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
+
+          //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce:fetchedValue]: c.io.fetchedValue = ${fetchedValue}")
+          c.io.out.bits.expect(triggerPacket.U)
           c.io.triggerContent.expect(triggerPacket.U)
 
           assert(inputMap.contains(fetchedValue))
           inputMap.remove(fetchedValue)
             c.clock.step()
+            currentCycle += 1
+            driveInputMap(inputMap)
           c.io.out.ready.poke(false.B)
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
 
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
           c.io.triggerContent.expect(triggerPacket.U)
 
           c.io.last.expect(true.B)
           checkWhetherOutputPacketIsAvailable(suffixValue, true)
-          driveInputMap(inputMap)
+            driveInputMap(inputMap)
         }
         assert(inputMap.size == 0)
 
         c.io.out.ready.poke(true.B)
         c.io.out.valid.expect(false.B)
           c.clock.step()
+					currentCycle += 1
+          driveInputMap(inputMap)
         c.io.out.ready.poke(false.B)
+
+          waitRandomAmountOfCycles()
+          driveInputMap(inputMap)
       }
 
       val ensureNothingIsBeingOutputted = () => {
@@ -206,151 +246,13 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.enablePrefixing.poke(true.B)
 
       for (i <- 0 until numTestLoops) {
+        //println(s"[RRArbiterWithPrefixAndSuffixTester:testEpoch]: $i")
         val inputMap = generateInputMap()
 
         ensureNothingIsBeingOutputted()
         c.clock.step()
+        currentCycle += 1
         ensureThatAllInputsAreTransmittedExactlyOnce(inputMap)
-      }
-    }
-  }
-
-	behavior of "GenerateAndSubmitPacketSequenceDependingOnAcknowledgement"
-  it should "be able to block any writes to io.out whenever there is a pending acknowledgement" in {
-    val inputType = UInt(64.W)
-    val sequenceLength = 3
-    val prefixValue = 111
-    val suffixValue = 333
-    val numTestLoops = 100
-
-    test(new GenerateAndSubmitPacketSequenceDependingOnAcknowledgement(inputType, numTestedCores, sequenceLength, prefixValue, suffixValue)) { c =>
-      val generateInputMap = () => {                                                                                        
-        var hashMap = new HashMap[Int, Int]()                                                                                 
-        for (i <- 0 until numTestedCores) {
-          if (nextBoolean()) {
-            hashMap += (i -> i)
-          }
-        }
-        hashMap                                                                                                             
-      } 
-
-      // TODO: Apply DRY to this function
-      val checkWhetherOutputPacketIsAvailable = (value : Int, step : Boolean) => {
-        c.io.out.bits.expect(value.U)
-        c.io.out.valid.expect(true.B)
-        c.io.out.ready.poke(true.B) // After this line, we can be sure a firing has happened
-        if (step) {
-          c.clock.step()
-          c.io.out.ready.poke(false.B)
-        }
-      }
-
-      val generateEmptyInputMap = () => {
-        var hashMap = new HashMap[Int, Int]()                                                                                 
-      }
-
-      val driveEmptyInputMap = () => {
-        for (i <- 0 until numTestedCores) {
-          c.io.in(i).valid.poke(false.B)
-        }
-      }
-
-      val driveInputMap = (inputMap : HashMap[Int, Int]) => {
-        driveEmptyInputMap()
-        inputMap.foreach{ case (idx, value) =>
-          c.io.in(idx).valid.poke(true.B)
-          c.io.in(idx).bits.poke(value.U)
-        }
-      }
-
-      val ensureThatOneSequenceIsTransmitted = (inputMap : HashMap[Int, Int]) => {
-        val numElements = inputMap.size
-        assert(numElements != 0)
-
-        driveInputMap(inputMap)
-        checkWhetherOutputPacketIsAvailable(prefixValue, true)
-        c.io.out.ready.poke(true.B)
-        c.io.out.valid.expect(true.B)
-
-        val fetchedValue = c.io.out.bits.peek().litValue.toInt
-
-        assert(inputMap.contains(fetchedValue))
-        inputMap.remove(fetchedValue)
-        c.clock.step()
-        c.io.out.ready.poke(false.B)
-        checkWhetherOutputPacketIsAvailable(suffixValue, true)
-        driveInputMap(inputMap)
-      }
-
-      val setAckSignal = () => {
-        c.io.picosAckInterface.valid.poke(true.B)
-        c.io.picosAckInterface.data.poke(1.U)
-      }
-
-      val unsetAckSignal = () => {
-        c.io.picosAckInterface.valid.poke(false.B)
-        c.io.picosAckInterface.data.poke(0.U)
-      }
-
-      val waitRandomAmountOfCycles = () => {
-        val numWaitCycles = r.nextInt(20)
-        for (k <- 0 until numWaitCycles) {
-          c.clock.step()
-        }
-      }
-
-      val ensureThatOneButNoMoreSequencesAreTransmitted = (inputMap : HashMap[Int, Int]) => {
-        ensureThatOneSequenceIsTransmitted(inputMap)
-        val fetchedValue = c.io.out.bits.peek().litValue.toInt
-        //println(s"[ensureThatOneButNoMoreSequencesAreTransmitted]: (fetchedValue) = ${fetchedValue}")
-        waitRandomAmountOfCycles()
-        c.io.out.valid.expect(false.B)
-        c.clock.step()
-      }
-
-      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap : HashMap[Int, Int]) => {
-        val numElements = inputMap.size
-        driveInputMap(inputMap)
-        for (i <- 0 until numElements) {
-          checkWhetherOutputPacketIsAvailable(prefixValue, true)
-          c.io.out.ready.poke(true.B)
-          c.io.out.valid.expect(true.B)
-
-          val fetchedValue = c.io.out.bits.peek().litValue.toInt
-
-          assert(inputMap.contains(fetchedValue))
-          inputMap.remove(fetchedValue)
-          c.clock.step()
-          c.io.out.ready.poke(false.B)
-          checkWhetherOutputPacketIsAvailable(suffixValue, true)
-          driveInputMap(inputMap)
-        }
-        assert(inputMap.size == 0)
-
-        c.io.out.ready.poke(true.B)
-        c.io.out.valid.expect(false.B)
-        c.clock.step()
-        c.io.out.ready.poke(false.B)
-      }
-
-      val ensureNothingIsBeingOutputted = () => {
-        c.io.out.valid.expect(false.B)
-      }
-
-      for (i <- 0 until numTestLoops) {
-        val inputMap = generateInputMap()
-        val numElements = inputMap.size
-
-        ensureNothingIsBeingOutputted()
-        breakable {
-          for (i <- 0 until numElements) {
-            ensureThatOneButNoMoreSequencesAreTransmitted(inputMap)
-            setAckSignal()
-            c.clock.step()
-            unsetAckSignal()
-            c.clock.step()
-          }
-        }
       }
     }
   }
@@ -361,20 +263,30 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
     val sequenceLength = 3
     val prefixValue = 3
     val suffixValue = 0
-    val numTestLoops = 100
+    val numTestLoops = 1000
     var triggerPacket = BigInt(0L)
+    var currentCycle = 0
 
     test(new RetirementHandler(numTestedCores)) { c =>
+      val waitRandomAmountOfCycles = () => {
+        val numWaitCycles = r.nextInt(20)
+        for (k <- 0 until numWaitCycles) {
+          c.clock.step()
+          currentCycle += 1
+        }
+      }
+
       val generateInputMap = () => {                                                                                        
-        val hashMap = new HashMap[Int, Long]()                                                                                 
-        val reverseMap = new HashMap[Long, Int]
+        val hashMap = new HashMap[Int, (Int, BigInt)]()
+        val reverseMap = new HashMap[BigInt, Int]
         
         for (i <- 0 until numTestedCores) {
           val testedTID = r.nextInt(1048576).toLong
-          val testedPicosID = r.nextInt(1048576).toLong
+          val testedPicosID = r.nextInt(10480576).toLong | (BigInt(r.nextInt(16)) << 60)
           val packet = testedPicosID | (testedTID << 32)
           if (nextBoolean() && !reverseMap.contains(packet)) {
-            hashMap += (i -> packet)
+            hashMap += (i -> (currentCycle + nextInt(10), packet))
+            // TODO: ENSURE COLISIONS ARE IMPOSSIBLE!
             reverseMap += (testedPicosID -> i)
           }
         }
@@ -388,12 +300,13 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         c.io.picosFinishedInterface.empty.poke(true.B) // After this line, we can be sure a firing has happened
         if (step) {
           c.clock.step()
+					currentCycle += 1
           c.io.picosFinishedInterface.empty.poke(false.B)
         }
       }
 
       val generateEmptyInputMap = () => {
-        var hashMap = new HashMap[Int, Long]()                                                                                 
+        var hashMap = new HashMap[Int, BigInt]()                                                                                 
       }
 
       val driveEmptyInputMap = () => {
@@ -402,19 +315,25 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
         }
       }
 
-      val driveInputMap = (inputMap : HashMap[Int, Long]) => {
+      val driveInputMap = (inputMap : HashMap[Int, (Int, BigInt)]) => {
         driveEmptyInputMap()
-        inputMap.foreach{ case (idx, value) =>
-          c.io.retInterface(idx).valid.poke(true.B)
+        inputMap.foreach{ case (idx, (minCycle, value)) =>
+          val minCycleWasReached = minCycle <= currentCycle
+          c.io.retInterface(idx).valid.poke(minCycleWasReached.B)
           c.io.retInterface(idx).bits.poke(value.U)
         }
       }
 
-      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap: HashMap[Int, Long], reverseMap: HashMap[Long, Int]) => {
+      val ensureThatAllInputsAreTransmittedExactlyOnce = (inputMap: HashMap[Int, (Int, BigInt)], reverseMap: HashMap[BigInt, Int]) => {
         val numElements = inputMap.size
         driveInputMap(inputMap)
         for (i <- 0 until numElements) {
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: Iteration #$i")
+          while (c.io.picosFinishedInterface.valid.peek().litValue == 0) {
+            c.clock.step()
+            currentCycle += 1
+            driveInputMap(inputMap)
+          }
           //c.io.arbiterMonitor.valid.expect(true.B)
           //triggerPacket = c.io.arbiterMonitor.bits.peek().litValue
 
@@ -423,11 +342,12 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
 
           //c.io.last.expect(false.B)
           checkWhetherOutputPacketIsAvailable(prefixValue, true)
+            driveInputMap(inputMap)
           c.io.picosFinishedInterface.empty.poke(true.B)
           c.io.picosFinishedInterface.valid.expect(true.B)
 
           //c.io.last.expect(false.B)
-          val fetchedPicosID = c.io.picosFinishedInterface.data.payload.peek().litValue.toInt
+          val fetchedPicosID = c.io.picosFinishedInterface.data.payload.peek().litValue
 
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
           //c.io.triggerContent.expect(triggerPacket.U)
@@ -435,13 +355,18 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
           assert(reverseMap.contains(fetchedPicosID))
 
           val idx = reverseMap(fetchedPicosID)
-          val tidGroundTruth = inputMap(idx) >> 32
+          val tidGroundTruth = (inputMap(idx)._2 >> 32) & 0xfffffffL
           reverseMap.remove(fetchedPicosID)
           inputMap.remove(idx)
 
           c.io.picosFinishedInterface.data.tid.expect(tidGroundTruth.U)
             c.clock.step()
+            currentCycle += 1
+            driveInputMap(inputMap)
           c.io.picosFinishedInterface.empty.poke(false.B)
+
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
 
           //println(s"[ensureThatAllInputsAreTransmittedExactlyOnce]: c.io.triggerContent = ${c.io.triggerContent.peek().litValue}")
           //c.io.triggerContent.expect(triggerPacket.U)
@@ -449,12 +374,15 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
           //c.io.last.expect(true.B)
           checkWhetherOutputPacketIsAvailable(suffixValue, true)
           driveInputMap(inputMap)
+            waitRandomAmountOfCycles()
+            driveInputMap(inputMap)
         }
         assert(inputMap.size == 0)
 
         c.io.picosFinishedInterface.empty.poke(true.B)
         c.io.picosFinishedInterface.valid.expect(false.B)
           c.clock.step()
+					currentCycle += 1
         c.io.picosFinishedInterface.empty.poke(false.B)
       }
 
@@ -467,6 +395,7 @@ class ArbiterTest extends AnyFlatSpec with ChiselScalatestTester {
 
         ensureNothingIsBeingOutputted()
           c.clock.step()
+					currentCycle += 1
         ensureThatAllInputsAreTransmittedExactlyOnce(inputMap, reverseMap)
       }
     }

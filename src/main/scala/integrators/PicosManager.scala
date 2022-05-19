@@ -570,7 +570,8 @@ class ReadyPacketExtractor(nCores: Int, qDepth: Int = 4) extends Module {
 	val readyPacket = Wire(new ReadyPacket)
 
 	val num_args = RegEnable(picosReadyInterfaceBits(15, 8), wf_counter === 0.U)
-	val wf_picosID = RegEnable(Cat(picosReadyInterfaceTID, picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
+	//val wf_picosID = RegEnable(Cat(picosReadyInterfaceTID, picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
+	val wf_picosID = RegEnable(Cat(picosReadyInterfaceBits(63, 60), picosReadyInterfaceTID(27, 0), picosReadyInterfaceBits(31, 0)), wf_counter === 1.U)
 	val wf_parentID = RegEnable(picosReadyInterfaceBits, wf_counter === 2.U)
 
 	readyPacket.nanosID := picosReadyInterfaceBits
@@ -610,8 +611,8 @@ class RetirementHandler (nCores: Int) extends Module {
 	val arbiter = Module(new RRArbiterWithPrefixAndSuffix(UInt(64.W), nCores, 3, 3, 0))
 
 	val rawRetirementPacket = arbiter.io.out.bits
-	val cleanRetirementPacket = rawRetirementPacket(31, 0)
-	val tID = arbiter.io.triggerContent(63, 32)
+	val cleanRetirementPacket = Cat(rawRetirementPacket(63, 60), 0.U(28.W), rawRetirementPacket(31, 0))
+	val tID = arbiter.io.triggerContent(59, 32)
 
 	io.retInterface.zip(arbiter.io.in).foreach { case (outer, inner) => inner <> outer }
 	io.picosFinishedInterface.data.payload := cleanRetirementPacket

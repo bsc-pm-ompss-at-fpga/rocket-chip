@@ -87,7 +87,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
     assert(((picosSubPacket >> 8) & 0xf) == numArgs)
     assert(((picosSubPacket >> 16) & 0xf) == numDeps)
-    //assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
+    assert(((picosSubPacket >> 32) & 0xffffffffL) == taskNumber)
   }
 
   // TODO: Implement once we start supporting nesting
@@ -154,6 +154,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
   def asUnsigned(unsignedLong: Long) =
     (BigInt(unsignedLong >>> 1) << 1) + (unsignedLong & 1)
 
+  /*
 	behavior of "DependenceInfoAdapter"
   it should "generate one Picos submission packet per depInfo packet whenever the second dependence is invalid" in {
       test(new DependenceInfoAdapter) { c =>
@@ -799,6 +800,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
       }
     }
   }
+  */
 
 	behavior of "SubmissionHandler"
   it should "Process submission sequences coming from different cores in an ack-dependent way" in {
@@ -807,10 +809,10 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
 
       c.io.enabled.poke(true.B)
 
-      for (i <- 0 until 100) {
+      for (i <- 0 until 1000) {
         val testNumArgs = 0
         val testTaskID = 1332341342L
-        val testTaskNumber = i + 1
+        val testTaskNumber = i
 
         val testNumDeps = r.nextInt(16)
         val testCoreID = r.nextInt(numTestedCores)
@@ -823,7 +825,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         val OUT_TYPE = 2
         val INOUT_TYPE = 3
 
-        //println(s"Test #$i")
+        println(s"Test #$i")
         //println(s"Num deps: $testNumDeps")
 
         if (!firstSubmission) {
@@ -836,7 +838,7 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
             c.clock.step()
           unsetAckSignal(c.io.picosAckInterface)
             c.clock.step()
-            c.clock.step()
+            //c.clock.step()
         }
 
         c.io.picosSubMaster.valid.expect(false.B)
@@ -938,9 +940,9 @@ class PicosManagerTest extends AnyFlatSpec with ChiselScalatestTester {
         c.clock.step()
         c.clock.step()
         c.clock.step()
-        c.io.last.expect(true.B)
         checkSWIDPacket(c.io.picosSubMaster, testNanosID)
         c.io.picosSubMaster.ready.poke(true.B)
+        c.io.last.expect(true.B)
           c.clock.step()
         c.io.picosSubMaster.ready.poke(false.B)
       }

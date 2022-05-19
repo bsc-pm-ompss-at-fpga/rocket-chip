@@ -558,26 +558,3 @@ class RRArbiterWithPrefixAndSuffix[T <: Data](typ: T, numProducers: Int, burstSi
     io.triggerContent := triggerContentReg
   }
 }
-
-class GenerateAndSubmitPacketSequenceDependingOnAcknowledgement[T <: Data](typ: T, numProducers: Int, burstSizeWithPrefixAndSuffix: Int, prefixValue: Int, suffixValue: Int) extends Module {
-  val io = IO(new Bundle {
-    val in = Vec(numProducers, Decoupled(typ.cloneType)).flip
-    val out = Decoupled(typ.cloneType)
-    val picosAckInterface = Flipped(new PicosFifoBundle(UInt(2.W)))
-  })
-
-  val arbiter = Module(new RRArbiterWithPrefixAndSuffix(typ, numProducers, burstSizeWithPrefixAndSuffix, prefixValue, suffixValue))
-
-  val awaitingAcknowledgement = RegInit(false.B)
-
-  arbiter.io.in <> io.in
-  arbiter.io.enablePrefixing := !awaitingAcknowledgement
-  io.out <> arbiter.io.out
-
-  io.picosAckInterface.empty := awaitingAcknowledgement
-  when (awaitingAcknowledgement) {
-    awaitingAcknowledgement := !(io.picosAckInterface.valid && (io.picosAckInterface.data === 1.U(2.W)))
-  } .otherwise {
-    awaitingAcknowledgement := arbiter.io.last && arbiter.io.out.fire()
-  }
-}
